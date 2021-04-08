@@ -7,9 +7,8 @@ pub enum InstructionType {
     SingleSwap,
     HalfwordTransferReg,
     HalfwordTransferImm,
-    SignedTransfer,
+    SingleTransfer,
     DataProcessing,
-    LoadStore,
     Undefined,
     BlockTransfer,
     Branch,
@@ -37,15 +36,13 @@ impl InstructionType {
             Self::HalfwordTransferReg
         } else if (hi_8 | 0b11011 == 0b00011111) && (lo_4 == 0b1011) {
             Self::HalfwordTransferImm
-        } else if (hi_8 | 0b11111 == 0b00011111) && (lo_4 | 0b0010 == 0b1111) {
-            Self::SignedTransfer
         } else if hi_8 | 0b111111 == 0b00111111 {
             Self::DataProcessing
         } else if hi_8 | 0b111111 == 0b01111111 {
             if (encoding >> 25) & 1 == 1 && (encoding >> 4) & 1 == 1 {
                 Self::Undefined
             } else {
-                Self::LoadStore
+                Self::SingleTransfer
             }
         } else if hi_8 | 0b11011 == 0b10011011 {
             Self::BlockTransfer

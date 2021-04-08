@@ -67,7 +67,7 @@ impl CPU {
         let instr_type = InstructionType::from_encoding(encoding);
         let condition = Condition::from_u8(((encoding >> 28) & 0xF) as u8);
         println!(
-            "{:8x}: {:8X} {:?} {:?} {:b}",
+            "{:8X}: {:8X} {:?} {:?} {:b}",
             pc, encoding, instr_type, condition, self.cpsr.raw
         );
 
@@ -76,12 +76,11 @@ impl CPU {
                 InstructionType::MultiplyAccumulate => {}
                 InstructionType::MultiplyAccumulateLong => {}
                 InstructionType::BranchExchange => self.branch_exchange(encoding),
-                InstructionType::SingleSwap => {}
+                InstructionType::SingleSwap => self.single_swap_instr(encoding),
                 InstructionType::HalfwordTransferReg => {}
                 InstructionType::HalfwordTransferImm => {}
-                InstructionType::SignedTransfer => {}
+                InstructionType::SingleTransfer => self.single_transfer_instr(encoding),
                 InstructionType::DataProcessing => self.data_proc_instr(encoding),
-                InstructionType::LoadStore => {}
                 InstructionType::Undefined => println!("Undefined instruction {:8X}", encoding),
                 InstructionType::BlockTransfer => {}
                 InstructionType::Branch => self.branch_instr(encoding),
@@ -92,6 +91,9 @@ impl CPU {
             }
         }
 
+        // TODO: I think it might be better to increment this before execution
+        // I think that's how it would work with a pipeline, anyway
+        // If changed, remember to modify the destination of branch instr's
         self.set_register(15, self.get_register(15).wrapping_add(4));
     }
 
@@ -169,14 +171,94 @@ impl CPU {
         self.cpsr.set_t(val & 1 == 1); // Set Thumb bit based on LSB
     }
 
+    fn single_swap_instr(&mut self, encoding: u32) {
+        let byte_flag = (encoding >> 22) & 1;
+
+        let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
+        let swap_addr = self.get_register(base_reg_n) as usize;
+
+        let dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
+        let source_reg_n = (encoding & 0b1111) as usize;
+        let source_reg = self.get_register(source_reg_n);
+
+        if byte_flag == 1 {
+            let old_data = self.read(swap_addr) as u32;
+            self.write(swap_addr, (source_reg & 0xFF) as u8);
+            self.set_register(dest_reg_n, old_data);
+        } else {
+            let old_data = self.read_u32(swap_addr);
+            self.write_u32(swap_addr, source_reg);
+            self.set_register(dest_reg_n, old_data);
+        };
+    }
+
+    fn single_transfer_instr(&mut self, encoding: u32) {
+        let reg_offset_flag = (encoding >> 25) & 1;
+        let pre_index_flag = (encoding >> 24) & 1;
+        let up_flag = (encoding >> 23) & 1;
+        let byte_flag = (encoding >> 22) & 1;
+        let write_back_flag = (encoding >> 21) & 1;
+        let load_flag = (encoding >> 20) & 1;
+
+        let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
+        let base_reg = self
+            .get_register(base_reg_n)
+            .wrapping_add(if base_reg_n == 15 { 8 } else { 0 });
+        let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
+
+        let offset = if reg_offset_flag == 1 {
+            self.shifted_reg_operand(encoding & 0xFFF, false).0
+        } else {
+            encoding & 0xFFF
+        };
+
+        let offset_addr = if up_flag == 1 {
+            base_reg.wrapping_add(offset)
+        } else {
+            base_reg.wrapping_sub(offset)
+        };
+
+        let transfer_addr = if pre_index_flag == 1 {
+            offset_addr
+        } else {
+            base_reg
+        } as usize;
+
+        // TODO: Handle endianness
+        // TODO: Handle special LDR behavior on non-word-aligned addresses
+        if load_flag == 1 {
+            let data = if byte_flag == 1 {
+                self.read(transfer_addr) as u32
+            } else {
+                self.read_u32(transfer_addr)
+            };
+            self.set_register(source_dest_reg_n, data);
+        } else {
+            if byte_flag == 1 {
+                let data = (self.get_register(source_dest_reg_n) & 0xFF) as u8;
+                self.write(transfer_addr, data);
+            } else {
+                self.write_u32(transfer_addr, self.get_register(source_dest_reg_n));
+            }
+        }
+
+        // Post-indexing always writes back
+        // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
+        // says "the W bit forces non-privileged mode for the transfer"
+        if write_back_flag == 1 || pre_index_flag == 0 {
+            self.set_register(base_reg_n, offset_addr);
+        }
+    }
+
     fn data_proc_instr(&mut self, encoding: u32) {
         let imm_flag = (encoding >> 25) & 1;
         let set_cond_flag = (encoding >> 20) & 1;
         let opcode = (encoding >> 21) & 0b1111;
 
         let op1_reg_n = ((encoding >> 16) & 0b1111) as usize;
-        let op1_reg = self.get_register(op1_reg_n)
-            + if op1_reg_n == 15 {
+        let op1_reg = self
+            .get_register(op1_reg_n)
+            .wrapping_add(if op1_reg_n == 15 {
                 // If the PC is used as an operand, prefetching causes it to be higher
                 // by an amount depending on whether the shift is specified directly or by a register
                 if imm_flag == 1 {
@@ -186,7 +268,7 @@ impl CPU {
                 }
             } else {
                 0
-            };
+            });
         let dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         // http://vision.gel.ulaval.ca/~jflalonde/cours/1001/h17/docs/arm-instructionset.pdf pages 4-12 through 4-15
@@ -202,87 +284,7 @@ impl CPU {
             };
             (shifter_operand, shifter_carry)
         } else {
-            let op2_reg_n = (encoding & 0b1111) as usize;
-            let op2_reg = self.get_register(op2_reg_n)
-                + if op2_reg_n == 15 {
-                    if imm_flag == 1 {
-                        8
-                    } else {
-                        12
-                    }
-                } else {
-                    0
-                };
-
-            let shift_by_reg = (encoding >> 4) & 1 == 1;
-            let shift_amount = if shift_by_reg {
-                self.get_register(((encoding >> 8) & 0b1111) as usize)
-            } else {
-                (encoding >> 7) & 0b11111
-            };
-
-            if shift_by_reg && shift_amount == 0 {
-                (op2_reg, self.cpsr.get_c())
-            } else {
-                match (encoding >> 5) & 0b11 {
-                    0b00 => {
-                        // LSL
-                        if shift_amount == 32 {
-                            (0, op2_reg & 1 == 1)
-                        } else if shift_amount > 32 {
-                            (0, false)
-                        } else {
-                            let shifter_carry = if shift_amount == 0 {
-                                self.cpsr.get_c()
-                            } else {
-                                (op2_reg >> (32 - shift_amount)) & 1 == 1
-                            };
-                            (op2_reg << shift_amount, shifter_carry)
-                        }
-                    }
-                    0b01 => {
-                        // LSR
-                        if shift_amount == 32 || shift_amount == 0 {
-                            (0, (op2_reg >> 31) & 1 == 1)
-                        } else if shift_amount > 32 {
-                            (0, false)
-                        } else {
-                            let shifter_carry = (op2_reg >> (shift_amount - 1)) & 1 == 1;
-                            (op2_reg >> shift_amount, shifter_carry)
-                        }
-                    }
-                    0b10 => {
-                        // ASR
-                        if shift_amount >= 32 || shift_amount == 0 {
-                            if (op2_reg >> 31) & 1 == 1 {
-                                (0xFFFFFFFF, true)
-                            } else {
-                                (0, false)
-                            }
-                        } else {
-                            let shifter_carry = (op2_reg >> (shift_amount - 1)) & 1 == 1;
-                            (((op2_reg as i32) >> shift_amount) as u32, shifter_carry)
-                        }
-                    }
-                    0b11 | _ => {
-                        // ROR
-                        if shift_amount == 32 {
-                            (op2_reg, (op2_reg >> 31) & 1 == 1)
-                        } else {
-                            let new_shift_amount = shift_amount % 32;
-                            if new_shift_amount == 0 {
-                                (
-                                    (op2_reg >> 1) | ((self.cpsr.get_c() as u32) << 31),
-                                    (op2_reg & 1) == 1,
-                                )
-                            } else {
-                                let shifter_carry = (op2_reg >> (shift_amount - 1)) & 1 == 1;
-                                (op2_reg.rotate_right(shift_amount), shifter_carry)
-                            }
-                        }
-                    }
-                }
-            }
+            self.shifted_reg_operand(encoding & 0xFFF, true)
         };
 
         let carry = self.cpsr.get_c() as u32;
@@ -324,6 +326,10 @@ impl CPU {
 
         if set_cond_flag == 1 {
             if dest_reg_n == 15 {
+                // TODO: should this update thumb state?
+                // https://www.cs.rit.edu/~tjh8300/CowBite/CowBiteSpec.htm:
+                // "Executing any arithmetic instruction with the PC as the target
+                // and the 'S' bit of the instruction set, with bit 0 of the new PC being 1."
                 if let Some(spsr) = self.get_mode_spsr() {
                     self.cpsr.raw = spsr.raw;
                 } else {
@@ -355,6 +361,83 @@ impl CPU {
             15,
             self.get_register(15).wrapping_add(offset).wrapping_add(4),
         );
+    }
+
+    // Decodes a 12-bit operand to a register shifted by an immediate- or register-defined value
+    // Returns (shifted result, barrel shifter carry out)
+    fn shifted_reg_operand(&self, operand: u32, allow_shift_by_reg: bool) -> (u32, bool) {
+        let op2_reg_n = (operand & 0b1111) as usize;
+        let op2_reg = self.get_register(op2_reg_n) + if op2_reg_n == 15 { 8 } else { 0 };
+
+        let shift_by_reg = (operand >> 4) & 1 == 1;
+        let shift_amount = if allow_shift_by_reg && shift_by_reg {
+            self.get_register(((operand >> 8) & 0b1111) as usize)
+        } else {
+            (operand >> 7) & 0b11111
+        };
+
+        if shift_by_reg && shift_amount == 0 {
+            (op2_reg, self.cpsr.get_c())
+        } else {
+            match (operand >> 5) & 0b11 {
+                0b00 => {
+                    // LSL
+                    if shift_amount == 32 {
+                        (0, op2_reg & 1 == 1)
+                    } else if shift_amount > 32 {
+                        (0, false)
+                    } else {
+                        let shifter_carry = if shift_amount == 0 {
+                            self.cpsr.get_c()
+                        } else {
+                            (op2_reg >> (32 - shift_amount)) & 1 == 1
+                        };
+                        (op2_reg << shift_amount, shifter_carry)
+                    }
+                }
+                0b01 => {
+                    // LSR
+                    if shift_amount == 32 || shift_amount == 0 {
+                        (0, (op2_reg >> 31) & 1 == 1)
+                    } else if shift_amount > 32 {
+                        (0, false)
+                    } else {
+                        let shifter_carry = (op2_reg >> (shift_amount - 1)) & 1 == 1;
+                        (op2_reg >> shift_amount, shifter_carry)
+                    }
+                }
+                0b10 => {
+                    // ASR
+                    if shift_amount >= 32 || shift_amount == 0 {
+                        if (op2_reg >> 31) & 1 == 1 {
+                            (0xFFFFFFFF, true)
+                        } else {
+                            (0, false)
+                        }
+                    } else {
+                        let shifter_carry = (op2_reg >> (shift_amount - 1)) & 1 == 1;
+                        (((op2_reg as i32) >> shift_amount) as u32, shifter_carry)
+                    }
+                }
+                0b11 | _ => {
+                    // ROR
+                    if shift_amount == 32 {
+                        (op2_reg, (op2_reg >> 31) & 1 == 1)
+                    } else {
+                        let new_shift_amount = shift_amount % 32;
+                        if new_shift_amount == 0 {
+                            (
+                                (op2_reg >> 1) | ((self.cpsr.get_c() as u32) << 31),
+                                (op2_reg & 1) == 1,
+                            )
+                        } else {
+                            let shifter_carry = (op2_reg >> (shift_amount - 1)) & 1 == 1;
+                            (op2_reg.rotate_right(shift_amount), shifter_carry)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
