@@ -77,8 +77,9 @@ impl CPU {
                 InstructionType::MultiplyAccumulateLong => {}
                 InstructionType::BranchExchange => self.branch_exchange(encoding),
                 InstructionType::SingleSwap => self.single_swap_instr(encoding),
-                InstructionType::HalfwordTransferReg => {}
-                InstructionType::HalfwordTransferImm => {}
+                InstructionType::HalfwordTransferReg | InstructionType::HalfwordTransferImm => {
+                    self.halfword_transfer_instr(encoding)
+                }
                 InstructionType::SingleTransfer => self.single_transfer_instr(encoding),
                 InstructionType::DataProcessing => self.data_proc_instr(encoding),
                 InstructionType::Undefined => println!("Undefined instruction {:8X}", encoding),
@@ -190,6 +191,63 @@ impl CPU {
             self.write_u32(swap_addr, source_reg);
             self.set_register(dest_reg_n, old_data);
         };
+    }
+
+    fn halfword_transfer_instr(&mut self, encoding: u32) {
+        let pre_index_flag = (encoding >> 24) & 1;
+        let up_flag = (encoding >> 23) & 1;
+        let write_back_flag = (encoding >> 21) & 1;
+        let load_flag = (encoding >> 20) & 1;
+
+        let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
+        let base_reg = self
+            .get_register(base_reg_n)
+            .wrapping_add(if base_reg_n == 15 { 8 } else { 0 });
+        let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
+
+        let offset = if (encoding >> 22) & 1 == 1 {
+            ((encoding & 0xF00) >> 4) | (encoding & 0xF)
+        } else {
+            self.get_register((encoding & 0b1111) as usize)
+        };
+
+        let offset_addr = if up_flag == 1 {
+            base_reg.wrapping_add(offset)
+        } else {
+            base_reg.wrapping_sub(offset)
+        };
+
+        let transfer_addr = if pre_index_flag == 1 {
+            offset_addr
+        } else {
+            base_reg
+        } as usize;
+
+        // TODO: Handle endianness
+        // TODO: Handle special LDR behavior on non-word-aligned addresses
+        if load_flag == 1 {
+            let data = match (encoding >> 5) & 0b11 {
+                0b01 => self.read_u16(transfer_addr) as u32, // Unsigned halfword
+                0b10 => ((self.read(transfer_addr) as i8) as i32) as u32, // Signed byte
+                0b11 => ((self.read_u16(transfer_addr) as i16) as i32) as u32, // Signed halfword
+                0b00 | _ => panic!("SWP format encountered in halfword transfer instruction"),
+            };
+            self.set_register(source_dest_reg_n, data);
+        } else {
+            let data = self.get_register(source_dest_reg_n);
+            match (encoding >> 5) & 0b11 {
+                0b01 => self.write_u16(transfer_addr, (data & 0xFFFF) as u16), // Unsigned halfword
+                0b10 | 0b11 => panic!("signed transfers used with store instructions"),
+                0b00 | _ => panic!("SWP format encountered in halfword transfer instruction"),
+            }
+        }
+
+        // Post-indexing always writes back
+        // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
+        // says "the W bit forces non-privileged mode for the transfer"
+        if write_back_flag == 1 || pre_index_flag == 0 {
+            self.set_register(base_reg_n, offset_addr);
+        }
     }
 
     fn single_transfer_instr(&mut self, encoding: u32) {
@@ -441,6 +499,10 @@ impl CPU {
     }
 }
 
+// TODO: Most memory-mapped registers seem to be 16- or 32-bit
+// Should they only be readable through reads of exactly that width?
+// It would make sense if reading a 32-bit address that contained two registers read both
+// But reading a byte within a 16-bit register wouldn't happen physically (?)
 impl Memory for CPU {
     // TODO: When do reads have side-effects?
     // kevtris says open bus, link port reg's, RX errors, joybus RX
