@@ -1,12 +1,12 @@
 #[derive(PartialEq)]
 pub enum OperatingMode {
-    User,
-    FastInterrupt,
-    Interrupt,
-    Supervisor,
-    Abort,
-    System,
-    Undefined,
+    User = 0b10000,
+    FastInterrupt = 0b10001,
+    Interrupt = 0b10010,
+    Supervisor = 0b10011,
+    Abort = 0b10111,
+    System = 0b11111,
+    Undefined = 0b11011,
 }
 
 impl OperatingMode {

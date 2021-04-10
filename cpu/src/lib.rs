@@ -9,6 +9,16 @@ use crate::{
 };
 use memory::{Memory, RAM, ROM};
 
+// https://developer.arm.com/documentation/ddi0210/c/Programmer-s-Model/Exceptions/Exception-vectors
+const RESET_VEC: u32 = 0x00000000;
+const UND_VEC: u32 = 0x00000004;
+const SWI_VEC: u32 = 0x00000008;
+const PREFETCH_ABT_VEC: u32 = 0x0000000C;
+const DATA_ABT_VEC: u32 = 0x00000010;
+const RESERVED_VEC: u32 = 0x00000014;
+const IRQ_VEC: u32 = 0x00000018;
+const FIQ_VEC: u32 = 0x0000001C;
+
 pub struct CPU {
     // The CPSR (current program status register),
     // and a SPSR (saved program status register) for each interrupt mode
@@ -89,7 +99,7 @@ impl CPU {
                 InstructionType::CoprocDataTransfer => {}
                 InstructionType::CoprocOperation => {}
                 InstructionType::CoprocRegOperation => {}
-                InstructionType::SoftwareInterrupt => {}
+                InstructionType::SoftwareInterrupt => self.software_interrupt(),
             }
         }
 
@@ -522,6 +532,15 @@ impl CPU {
             15,
             self.get_register(15).wrapping_add(offset).wrapping_add(4),
         );
+    }
+
+    fn software_interrupt(&mut self) {
+        self.svc_register_bank[1] = self.get_register(15).wrapping_add(4);
+        self.svc_spsr.raw = self.cpsr.raw;
+        self.cpsr.set_mode(OperatingMode::System);
+        self.cpsr.set_t(false);
+        self.cpsr.set_i(true);
+        self.set_register(15, SWI_VEC);
     }
 
     // Decodes a 12-bit operand to a register shifted by an immediate- or register-defined value
