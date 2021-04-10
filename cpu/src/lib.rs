@@ -173,7 +173,7 @@ impl CPU {
     }
 
     fn single_swap_instr(&mut self, encoding: u32) {
-        let byte_flag = (encoding >> 22) & 1;
+        let byte_flag = (encoding >> 22) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let swap_addr = self.get_register(base_reg_n) as usize;
@@ -182,7 +182,7 @@ impl CPU {
         let source_reg_n = (encoding & 0b1111) as usize;
         let source_reg = self.get_register(source_reg_n);
 
-        if byte_flag == 1 {
+        if byte_flag {
             let old_data = self.read(swap_addr) as u32;
             self.write(swap_addr, (source_reg & 0xFF) as u8);
             self.set_register(dest_reg_n, old_data);
@@ -194,10 +194,10 @@ impl CPU {
     }
 
     fn halfword_transfer_instr(&mut self, encoding: u32) {
-        let pre_index_flag = (encoding >> 24) & 1;
-        let up_flag = (encoding >> 23) & 1;
-        let write_back_flag = (encoding >> 21) & 1;
-        let load_flag = (encoding >> 20) & 1;
+        let pre_index_flag = (encoding >> 24) & 1 == 1;
+        let up_flag = (encoding >> 23) & 1 == 1;
+        let write_back_flag = (encoding >> 21) & 1 == 1;
+        let load_flag = (encoding >> 20) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let base_reg = self
@@ -211,13 +211,13 @@ impl CPU {
             self.get_register((encoding & 0b1111) as usize)
         };
 
-        let offset_addr = if up_flag == 1 {
+        let offset_addr = if up_flag {
             base_reg.wrapping_add(offset)
         } else {
             base_reg.wrapping_sub(offset)
         };
 
-        let transfer_addr = if pre_index_flag == 1 {
+        let transfer_addr = if pre_index_flag {
             offset_addr
         } else {
             base_reg
@@ -225,7 +225,7 @@ impl CPU {
 
         // TODO: Handle endianness
         // TODO: Handle special LDR behavior on non-word-aligned addresses
-        if load_flag == 1 {
+        if load_flag {
             let data = match (encoding >> 5) & 0b11 {
                 0b01 => self.read_u16(transfer_addr) as u32, // Unsigned halfword
                 0b10 => ((self.read(transfer_addr) as i8) as i32) as u32, // Signed byte
@@ -245,18 +245,18 @@ impl CPU {
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if write_back_flag == 1 || pre_index_flag == 0 {
+        if write_back_flag || !pre_index_flag {
             self.set_register(base_reg_n, offset_addr);
         }
     }
 
     fn single_transfer_instr(&mut self, encoding: u32) {
-        let reg_offset_flag = (encoding >> 25) & 1;
-        let pre_index_flag = (encoding >> 24) & 1;
-        let up_flag = (encoding >> 23) & 1;
-        let byte_flag = (encoding >> 22) & 1;
-        let write_back_flag = (encoding >> 21) & 1;
-        let load_flag = (encoding >> 20) & 1;
+        let reg_offset_flag = (encoding >> 25) & 1 == 1;
+        let pre_index_flag = (encoding >> 24) & 1 == 1;
+        let up_flag = (encoding >> 23) & 1 == 1;
+        let byte_flag = (encoding >> 22) & 1 == 1;
+        let write_back_flag = (encoding >> 21) & 1 == 1;
+        let load_flag = (encoding >> 20) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let base_reg = self
@@ -264,19 +264,19 @@ impl CPU {
             .wrapping_add(if base_reg_n == 15 { 8 } else { 0 });
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
-        let offset = if reg_offset_flag == 1 {
+        let offset = if reg_offset_flag {
             self.shifted_reg_operand(encoding & 0xFFF, false).0
         } else {
             encoding & 0xFFF
         };
 
-        let offset_addr = if up_flag == 1 {
+        let offset_addr = if up_flag {
             base_reg.wrapping_add(offset)
         } else {
             base_reg.wrapping_sub(offset)
         };
 
-        let transfer_addr = if pre_index_flag == 1 {
+        let transfer_addr = if pre_index_flag {
             offset_addr
         } else {
             base_reg
@@ -284,15 +284,15 @@ impl CPU {
 
         // TODO: Handle endianness
         // TODO: Handle special LDR behavior on non-word-aligned addresses
-        if load_flag == 1 {
-            let data = if byte_flag == 1 {
+        if load_flag {
+            let data = if byte_flag {
                 self.read(transfer_addr) as u32
             } else {
                 self.read_u32(transfer_addr)
             };
             self.set_register(source_dest_reg_n, data);
         } else {
-            if byte_flag == 1 {
+            if byte_flag {
                 let data = (self.get_register(source_dest_reg_n) & 0xFF) as u8;
                 self.write(transfer_addr, data);
             } else {
@@ -303,14 +303,14 @@ impl CPU {
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if write_back_flag == 1 || pre_index_flag == 0 {
+        if write_back_flag || !pre_index_flag {
             self.set_register(base_reg_n, offset_addr);
         }
     }
 
     fn data_proc_instr(&mut self, encoding: u32) {
-        let imm_flag = (encoding >> 25) & 1;
-        let set_cond_flag = (encoding >> 20) & 1;
+        let imm_flag = (encoding >> 25) & 1 == 1;
+        let set_cond_flag = (encoding >> 20) & 1 == 1;
         let opcode = (encoding >> 21) & 0b1111;
 
         let op1_reg_n = ((encoding >> 16) & 0b1111) as usize;
@@ -319,7 +319,7 @@ impl CPU {
             .wrapping_add(if op1_reg_n == 15 {
                 // If the PC is used as an operand, prefetching causes it to be higher
                 // by an amount depending on whether the shift is specified directly or by a register
-                if imm_flag == 1 {
+                if imm_flag {
                     8
                 } else {
                     12
@@ -331,7 +331,7 @@ impl CPU {
 
         // http://vision.gel.ulaval.ca/~jflalonde/cours/1001/h17/docs/arm-instructionset.pdf pages 4-12 through 4-15
         // TODO: PC is supposed to produce lots of special cases
-        let (op2, shifter_carry) = if imm_flag == 1 {
+        let (op2, shifter_carry) = if imm_flag {
             let rotate = ((encoding >> 8) & 0b1111) * 2;
             let imm = encoding & 0xFF;
             let shifter_operand = imm.rotate_right(rotate);
@@ -382,7 +382,7 @@ impl CPU {
             self.set_register(dest_reg_n, result);
         }
 
-        if set_cond_flag == 1 {
+        if set_cond_flag {
             if dest_reg_n == 15 {
                 // TODO: should this update thumb state?
                 // https://www.cs.rit.edu/~tjh8300/CowBite/CowBiteSpec.htm:
@@ -406,11 +406,11 @@ impl CPU {
     }
 
     fn block_transfer(&mut self, encoding: u32) {
-        let pre_index_flag = (encoding >> 24) & 1;
-        let up_flag = (encoding >> 23) & 1;
-        let psr_force_user_flag = (encoding >> 22) & 1;
-        let write_back_flag = (encoding >> 21) & 1;
-        let load_flag = (encoding >> 20) & 1;
+        let pre_index_flag = (encoding >> 24) & 1 == 1;
+        let up_flag = (encoding >> 23) & 1 == 1;
+        let psr_force_user_flag = (encoding >> 22) & 1 == 1;
+        let write_back_flag = (encoding >> 21) & 1 == 1;
+        let load_flag = (encoding >> 20) & 1 == 1;
 
         let reg_n_list = (0..16)
             .filter(|i| (encoding >> i) & 1 == 1)
@@ -419,19 +419,19 @@ impl CPU {
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let base_reg = self.get_register(base_reg_n);
-        let mut transfer_addr = if up_flag == 1 {
-            base_reg.wrapping_add(if pre_index_flag == 1 { 4 } else { 0 })
+        let mut transfer_addr = if up_flag {
+            base_reg.wrapping_add(if pre_index_flag { 4 } else { 0 })
         } else {
             base_reg
                 .wrapping_sub(4 * reg_n_list.len() as u32)
-                .wrapping_add(if pre_index_flag == 0 { 4 } else { 0 })
+                .wrapping_add(if !pre_index_flag { 4 } else { 0 })
         };
 
         for reg_n in &reg_n_list {
-            if load_flag == 1 {
+            if load_flag {
                 let data = self.read_u32(transfer_addr as usize);
                 // If S flag is set and r15 is not in the list, the user bank is used
-                if psr_force_user_flag == 1 && !pc_in_list {
+                if psr_force_user_flag && !pc_in_list {
                     self.registers[*reg_n] = data;
                 } else {
                     self.set_register(*reg_n, data);
@@ -439,7 +439,7 @@ impl CPU {
 
                 // If S flag is set and r15 is in the list, the SPSR is restored
                 // at the same time r15 is loaded
-                if psr_force_user_flag == 1 && *reg_n == 15 {
+                if psr_force_user_flag && *reg_n == 15 {
                     self.cpsr.raw = self
                         .get_mode_spsr()
                         .expect("attempted to get SPSR in non-privileged mode")
@@ -447,7 +447,7 @@ impl CPU {
                 }
             } else {
                 // If S flag is set and r15 is not in the list, the user bank is used
-                if psr_force_user_flag == 1 {
+                if psr_force_user_flag {
                     self.write_u32(transfer_addr as usize, self.registers[*reg_n])
                 } else {
                     self.write_u32(transfer_addr as usize, self.get_register(*reg_n))
@@ -457,8 +457,8 @@ impl CPU {
             transfer_addr += 4;
         }
 
-        if write_back_flag == 1 {
-            let offset_addr = if up_flag == 1 {
+        if write_back_flag {
+            let offset_addr = if up_flag {
                 base_reg.wrapping_add(4 * reg_n_list.len() as u32)
             } else {
                 base_reg.wrapping_sub(4 * reg_n_list.len() as u32)
@@ -468,8 +468,8 @@ impl CPU {
     }
 
     fn branch_instr(&mut self, encoding: u32) {
-        let link_flag = (encoding >> 24) & 1;
-        if link_flag == 1 {
+        let link_flag = (encoding >> 24) & 1 == 1;
+        if link_flag {
             self.set_register(14, self.get_register(15));
         }
 
