@@ -1,8 +1,8 @@
 // https://www.ecs.csun.edu/~smirzaei/docs/ece425/arm7tdmi_instruction_set_reference.pdf page 1
 #[derive(Debug)]
 pub enum InstructionType {
-    MultiplyAccumulate,
-    MultiplyAccumulateLong,
+    Multiply,
+    MultiplyLong,
     BranchExchange,
     SingleSwap,
     HalfwordTransferReg,
@@ -25,9 +25,9 @@ impl InstructionType {
         let lo_4 = lo_8 & 0xF;
 
         if (hi_8 | 0b11 == 0b00000011) && (lo_4 == 0b1001) {
-            Self::MultiplyAccumulate
+            Self::Multiply
         } else if (hi_8 | 0b111 == 0b00001111) && (lo_4 == 0b1001) {
-            Self::MultiplyAccumulateLong
+            Self::MultiplyLong
         } else if (encoding >> 4) & 0xFFFFFF == 0x12fff1 {
             Self::BranchExchange
         } else if (hi_8 | 0b100 == 0b00010100) && (lo_8 == 0b00001001) {

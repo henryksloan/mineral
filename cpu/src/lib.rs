@@ -73,8 +73,9 @@ impl CPU {
 
         if self.eval_condition(condition) {
             match instr_type {
-                InstructionType::MultiplyAccumulate => {}
-                InstructionType::MultiplyAccumulateLong => {}
+                InstructionType::Multiply | InstructionType::MultiplyLong => {
+                    self.multiply_instr(encoding)
+                }
                 InstructionType::BranchExchange => self.branch_exchange(encoding),
                 InstructionType::SingleSwap => self.single_swap_instr(encoding),
                 InstructionType::HalfwordTransferReg | InstructionType::HalfwordTransferImm => {
@@ -163,6 +164,46 @@ impl CPU {
             OperatingMode::Interrupt => Some(&mut self.irq_spsr),
             OperatingMode::Undefined => Some(&mut self.und_spsr),
             _ => None,
+        }
+    }
+
+    fn multiply_instr(&mut self, encoding: u32) {
+        let long_flag = (encoding >> 23) & 1 == 1; // Output to two registers, allowing 64 bits
+        let unsigned_flag = (encoding >> 22) & 1 == 1; // Only used for long multiplies
+        let accumulate_flag = (encoding >> 21) & 1 == 1; // Allows a value to be added to the product
+        let set_cond_flag = (encoding >> 20) & 1 == 1; // Updates zero and negative CPSR flags
+
+        let op1 = self.get_register(((encoding >> 8) & 0b1111) as usize);
+        let op2 = self.get_register((encoding & 0b1111) as usize);
+        let product = if long_flag && !unsigned_flag {
+            (op1 as i64 * op2 as i64) as u64
+        } else {
+            op1 as u64 * op2 as u64
+        };
+
+        let other_reg_hi_n = ((encoding >> 16) & 0b1111) as usize;
+        let other_reg_lo_n = ((encoding >> 12) & 0b1111) as usize;
+
+        let addend = if long_flag {
+            ((self.get_register(other_reg_hi_n) as u64) << 32)
+                | self.get_register(other_reg_lo_n) as u64
+        } else {
+            self.get_register(other_reg_lo_n as usize) as u64
+        };
+
+        // Write results and optionally set condition flags
+        let result = product + if accumulate_flag { addend } else { 0 };
+        if long_flag {
+            self.set_register(other_reg_lo_n, (result & 0xFFFFFFFF) as u32);
+            self.set_register(other_reg_hi_n, ((result >> 32) & 0xFFFFFFFF) as u32);
+        } else {
+            self.set_register(other_reg_hi_n, (result & 0xFFFFFFFF) as u32);
+        }
+
+        if set_cond_flag {
+            self.cpsr.set_z(result == 0);
+            let sign_bit_offset = if long_flag { 63 } else { 31 };
+            self.cpsr.set_n((result >> sign_bit_offset) & 1 == 1);
         }
     }
 
