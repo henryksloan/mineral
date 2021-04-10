@@ -81,9 +81,9 @@ impl CPU {
                     self.halfword_transfer_instr(encoding)
                 }
                 InstructionType::SingleTransfer => self.single_transfer_instr(encoding),
-                InstructionType::DataProcessing => self.data_proc_instr(encoding),
+                InstructionType::DataProcessing => self.data_proc_instr(encoding), // TODO: Also PSR mov's?
                 InstructionType::Undefined => println!("Undefined instruction {:8X}", encoding),
-                InstructionType::BlockTransfer => {}
+                InstructionType::BlockTransfer => self.block_transfer(encoding),
                 InstructionType::Branch => self.branch_instr(encoding),
                 InstructionType::CoprocDataTransfer => {}
                 InstructionType::CoprocOperation => {}
@@ -402,6 +402,68 @@ impl CPU {
                 self.cpsr.set_z(result == 0);
                 self.cpsr.set_n((result >> 31) & 1 == 1);
             }
+        }
+    }
+
+    fn block_transfer(&mut self, encoding: u32) {
+        let pre_index_flag = (encoding >> 24) & 1;
+        let up_flag = (encoding >> 23) & 1;
+        let psr_force_user_flag = (encoding >> 22) & 1;
+        let write_back_flag = (encoding >> 21) & 1;
+        let load_flag = (encoding >> 20) & 1;
+
+        let reg_n_list = (0..16)
+            .filter(|i| (encoding >> i) & 1 == 1)
+            .collect::<Vec<usize>>();
+        let pc_in_list = (encoding >> 15) & 1 == 1;
+
+        let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
+        let base_reg = self.get_register(base_reg_n);
+        let mut transfer_addr = if up_flag == 1 {
+            base_reg.wrapping_add(if pre_index_flag == 1 { 4 } else { 0 })
+        } else {
+            base_reg
+                .wrapping_sub(4 * reg_n_list.len() as u32)
+                .wrapping_add(if pre_index_flag == 0 { 4 } else { 0 })
+        };
+
+        for reg_n in &reg_n_list {
+            if load_flag == 1 {
+                let data = self.read_u32(transfer_addr as usize);
+                // If S flag is set and r15 is not in the list, the user bank is used
+                if psr_force_user_flag == 1 && !pc_in_list {
+                    self.registers[*reg_n] = data;
+                } else {
+                    self.set_register(*reg_n, data);
+                }
+
+                // If S flag is set and r15 is in the list, the SPSR is restored
+                // at the same time r15 is loaded
+                if psr_force_user_flag == 1 && *reg_n == 15 {
+                    self.cpsr.raw = self
+                        .get_mode_spsr()
+                        .expect("attempted to get SPSR in non-privileged mode")
+                        .raw;
+                }
+            } else {
+                // If S flag is set and r15 is not in the list, the user bank is used
+                if psr_force_user_flag == 1 {
+                    self.write_u32(transfer_addr as usize, self.registers[*reg_n])
+                } else {
+                    self.write_u32(transfer_addr as usize, self.get_register(*reg_n))
+                }
+            }
+
+            transfer_addr += 4;
+        }
+
+        if write_back_flag == 1 {
+            let offset_addr = if up_flag == 1 {
+                base_reg.wrapping_add(4 * reg_n_list.len() as u32)
+            } else {
+                base_reg.wrapping_sub(4 * reg_n_list.len() as u32)
+            };
+            self.set_register(base_reg_n, offset_addr)
         }
     }
 
