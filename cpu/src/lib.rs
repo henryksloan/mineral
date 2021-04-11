@@ -396,37 +396,43 @@ impl CPU {
             self.shifted_reg_operand(encoding & 0xFFF, true)
         };
 
+        let check_overflow = |result: u32, write_result: bool| {
+            (
+                result,
+                Some(Self::did_overflow(op1_reg, op2, result)),
+                write_result,
+            )
+        };
+
         let carry = self.cpsr.get_c() as u32;
-        let (result, update_overflow, write_result) = match opcode {
-            0b0000 => (op1_reg & op2, false, true),            // AND
-            0b0001 => (op1_reg ^ op2, false, true),            // EOR
-            0b0010 => (op1_reg.wrapping_sub(op2), true, true), // SUB
-            0b0011 => (op2.wrapping_sub(op1_reg), true, true), // RSB
-            0b0100 => (op1_reg.wrapping_add(op2), true, true), // ADD
-            0b0101 => (op1_reg.wrapping_add(op2).wrapping_add(carry), true, true), // ADC
-            0b0110 => (
+        let (result, overflow, write_result) = match opcode {
+            0b0000 => (op1_reg & op2, None, true), // AND
+            0b0001 => (op1_reg ^ op2, None, true), // EOR
+            0b0010 => check_overflow(op1_reg.wrapping_sub(op2), true), // SUB
+            0b0011 => check_overflow(op2.wrapping_sub(op1_reg), true), // RSB
+            0b0100 => check_overflow(op1_reg.wrapping_add(op2), true), // ADD
+            0b0101 => check_overflow(op1_reg.wrapping_add(op2).wrapping_add(carry), true), // ADC
+            0b0110 => check_overflow(
                 op1_reg
                     .wrapping_sub(op2)
                     .wrapping_add(carry)
                     .wrapping_sub(1),
                 true,
-                true,
             ), // SBC
-            0b0111 => (
+            0b0111 => check_overflow(
                 op2.wrapping_sub(op1_reg)
                     .wrapping_add(carry)
                     .wrapping_sub(1),
                 true,
-                true,
             ), // RSC
-            0b1000 => (op1_reg & op2, false, false),           // TST
-            0b1001 => (op1_reg ^ op2, false, false),           // TEQ
-            0b1010 => (op1_reg.wrapping_sub(op2), true, false), // CMP
-            0b1011 => (op1_reg.wrapping_add(op2), true, false), // CMN
-            0b1100 => (op1_reg | op2, false, true),            // OOR
-            0b1101 => (op2, false, true),                      // MOV
-            0b1110 => (op1_reg & !op2, false, true),           // BIC
-            0b1111 | _ => (!op2, false, true),                 // MVN
+            0b1000 => (op1_reg & op2, None, false), // TST
+            0b1001 => (op1_reg ^ op2, None, false), // TEQ
+            0b1010 => check_overflow(op1_reg.wrapping_sub(op2), false), // CMP
+            0b1011 => check_overflow(op1_reg.wrapping_add(op2), false), // CMN
+            0b1100 => (op1_reg | op2, None, true), // OOR
+            0b1101 => (op2, None, true),           // MOV
+            0b1110 => (op1_reg & !op2, None, true), // BIC
+            0b1111 | _ => (!op2, None, true),      // MVN
         };
 
         if write_result {
@@ -445,9 +451,8 @@ impl CPU {
                     panic!("attempted to copy from SPSR in User or System mode");
                 }
             } else {
-                if update_overflow {
-                    // TODO
-                    // self.cpsr.set_v()
+                if let Some(new_overflow) = overflow {
+                    self.cpsr.set_v(new_overflow)
                 }
                 self.cpsr.set_c(shifter_carry);
                 self.cpsr.set_z(result == 0);
@@ -618,6 +623,14 @@ impl CPU {
                 }
             }
         }
+    }
+
+    // Checks whether an add or subtract has resulted in overflow
+    fn did_overflow(op1: u32, op2: u32, result: u32) -> bool {
+        let op1_sign = (op1 >> 31) & 1 == 1;
+        let op2_sign = (op2 >> 31) & 1 == 1;
+        let result_sign = (result >> 31) & 1 == 1;
+        (op1_sign == op2_sign) && (op1_sign != result_sign)
     }
 }
 
