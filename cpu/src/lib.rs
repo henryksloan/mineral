@@ -92,8 +92,8 @@ impl CPU {
                     self.halfword_transfer_instr(encoding)
                 }
                 InstructionType::SingleTransfer => self.single_transfer_instr(encoding),
-                InstructionType::DataProcessing => self.data_proc_instr(encoding), // TODO: Also PSR mov's?
-                InstructionType::Undefined => println!("Undefined instruction {:8X}", encoding),
+                InstructionType::DataProcessing => self.data_proc_instr(encoding),
+                InstructionType::Undefined => println!("Undefined instruction {:8X}", encoding), // TODO: Do trap
                 InstructionType::BlockTransfer => self.block_transfer(encoding),
                 InstructionType::Branch => self.branch_instr(encoding),
                 InstructionType::CoprocDataTransfer => {}
@@ -364,6 +364,20 @@ impl CPU {
         let set_cond_flag = (encoding >> 20) & 1 == 1;
         let opcode = (encoding >> 21) & 0b1111;
 
+        let dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
+
+        // PSR instructions are special cases of this encoding
+        if !set_cond_flag {
+            let use_spsr_flag = (encoding >> 22) & 1 == 1;
+            if (opcode | 0b0010) == 0b1010 && !imm_flag {
+                self.move_psr_into_reg(use_spsr_flag, dest_reg_n);
+                return;
+            } else if (opcode | 0b0010) == 0b1011 {
+                self.move_into_psr(use_spsr_flag, imm_flag, encoding);
+                return;
+            }
+        };
+
         let op1_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let op1_reg = self
             .get_register(op1_reg_n)
@@ -378,20 +392,11 @@ impl CPU {
             } else {
                 0
             });
-        let dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         // http://vision.gel.ulaval.ca/~jflalonde/cours/1001/h17/docs/arm-instructionset.pdf pages 4-12 through 4-15
         // TODO: PC is supposed to produce lots of special cases
         let (op2, shifter_carry) = if imm_flag {
-            let rotate = ((encoding >> 8) & 0b1111) * 2;
-            let imm = encoding & 0xFF;
-            let shifter_operand = imm.rotate_right(rotate);
-            let shifter_carry = if rotate == 0 {
-                self.cpsr.get_c()
-            } else {
-                (shifter_operand >> 31) & 1 == 1
-            };
-            (shifter_operand, shifter_carry)
+            self.rotated_imm_operand(encoding & 0xFFF)
         } else {
             self.shifted_reg_operand(encoding & 0xFFF, true)
         };
@@ -458,6 +463,43 @@ impl CPU {
                 self.cpsr.set_z(result == 0);
                 self.cpsr.set_n((result >> 31) & 1 == 1);
             }
+        }
+    }
+
+    fn move_psr_into_reg(&mut self, use_spsr_flag: bool, dest_reg_n: usize) {
+        let val = if use_spsr_flag {
+            self.get_mode_spsr()
+                .expect("attempted to get SPSR in non-privileged mode")
+                .raw
+        } else {
+            self.cpsr.raw
+        };
+        self.set_register(dest_reg_n, val);
+    }
+
+    fn move_into_psr(&mut self, use_spsr_flag: bool, imm_flag: bool, encoding: u32) {
+        let val = if imm_flag {
+            self.rotated_imm_operand(encoding & 0xFFF).0
+        } else {
+            self.get_register((encoding & 0b1111) as usize)
+        };
+
+        // Sets whether certain parts of the PSR will be modified
+        let control_mask = (encoding >> 16) & 1 == 1; // PSR[7:0]
+        let extension_mask = (encoding >> 17) & 1 == 1; // PSR[15:8]
+        let status_mask = (encoding >> 18) & 1 == 1; // PSR[23:16]
+        let flags_mask = (encoding >> 19) & 1 == 1; // PSR[31:24]
+        let mask = if control_mask { 0xFF } else { 0 }
+            | if extension_mask { 0xFF << 8 } else { 0 }
+            | if status_mask { 0xFF << 16 } else { 0 }
+            | if flags_mask { 0xFF << 24 } else { 0 };
+
+        if use_spsr_flag {
+            let spsr = self
+                .get_mode_spsr()
+                .expect("attempted to get SPSR in non-privileged mode");
+            (*spsr).raw &= mask;
+            (*spsr).raw |= val & mask;
         }
     }
 
@@ -623,6 +665,20 @@ impl CPU {
                 }
             }
         }
+    }
+
+    // Decodes a 12-bit operand to an immediate rotated by a 4-bit unsigned immediate
+    // Returns (shifted result, barrel shifter carry out)
+    fn rotated_imm_operand(&self, operand: u32) -> (u32, bool) {
+        let rotate = ((operand >> 8) & 0b1111) * 2;
+        let imm = operand & 0xFF;
+        let shifter_operand = imm.rotate_right(rotate);
+        let shifter_carry = if rotate == 0 {
+            self.cpsr.get_c()
+        } else {
+            (shifter_operand >> 31) & 1 == 1
+        };
+        (shifter_operand, shifter_carry)
     }
 
     // Checks whether an add or subtract has resulted in overflow
