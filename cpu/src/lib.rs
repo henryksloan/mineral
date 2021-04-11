@@ -135,14 +135,14 @@ impl CPU {
         if n == 13 || n == 14 {
             match mode {
                 OperatingMode::User | OperatingMode::System => self.registers[n],
-                OperatingMode::FastInterrupt => self.fiq_register_bank[n],
-                OperatingMode::Interrupt => self.irq_register_bank[n],
-                OperatingMode::Supervisor => self.svc_register_bank[n],
-                OperatingMode::Abort => self.abt_register_bank[n],
-                OperatingMode::Undefined => self.und_register_bank[n],
+                OperatingMode::FastInterrupt => self.fiq_register_bank[n - 8],
+                OperatingMode::Interrupt => self.irq_register_bank[n - 13],
+                OperatingMode::Supervisor => self.svc_register_bank[n - 13],
+                OperatingMode::Abort => self.abt_register_bank[n - 13],
+                OperatingMode::Undefined => self.und_register_bank[n - 13],
             }
         } else if mode == OperatingMode::FastInterrupt && n >= 8 && n <= 14 {
-            self.fiq_register_bank[n]
+            self.fiq_register_bank[n - 8]
         } else {
             self.registers[n]
         }
@@ -153,14 +153,14 @@ impl CPU {
         if n == 13 || n == 14 {
             match mode {
                 OperatingMode::User | OperatingMode::System => self.registers[n] = val,
-                OperatingMode::FastInterrupt => self.fiq_register_bank[n] = val,
-                OperatingMode::Interrupt => self.irq_register_bank[n] = val,
-                OperatingMode::Supervisor => self.svc_register_bank[n] = val,
-                OperatingMode::Abort => self.abt_register_bank[n] = val,
-                OperatingMode::Undefined => self.und_register_bank[n] = val,
+                OperatingMode::FastInterrupt => self.fiq_register_bank[n - 8] = val,
+                OperatingMode::Interrupt => self.irq_register_bank[n - 13] = val,
+                OperatingMode::Supervisor => self.svc_register_bank[n - 13] = val,
+                OperatingMode::Abort => self.abt_register_bank[n - 13] = val,
+                OperatingMode::Undefined => self.und_register_bank[n - 13] = val,
             }
         } else if mode == OperatingMode::FastInterrupt && n >= 8 && n <= 14 {
-            self.fiq_register_bank[n] = val
+            self.fiq_register_bank[n - 8] = val
         } else {
             self.registers[n] = val
         }
