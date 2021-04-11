@@ -67,6 +67,11 @@ impl StatusRegister {
         self.set_bit(5, val)
     }
 
+    pub fn set_mode(&mut self, mode: OperatingMode) {
+        self.raw &= !0b11111;
+        self.raw |= mode as u32;
+    }
+
     pub fn get_mode(&self) -> OperatingMode {
         OperatingMode::from_u32(self.raw & 0b11111).expect("Invalid operating mode")
     }
