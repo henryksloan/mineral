@@ -93,7 +93,7 @@ impl CPU {
                 }
                 InstructionType::SingleTransfer => self.single_transfer_instr(encoding),
                 InstructionType::DataProcessing => self.data_proc_instr(encoding),
-                InstructionType::Undefined => println!("Undefined instruction {:8X}", encoding), // TODO: Do trap
+                InstructionType::Undefined => self.undefined_interrupt(),
                 InstructionType::BlockTransfer => self.block_transfer(encoding),
                 InstructionType::Branch => self.branch_instr(encoding),
                 InstructionType::CoprocDataTransfer => {}
@@ -588,6 +588,15 @@ impl CPU {
         self.cpsr.set_t(false);
         self.cpsr.set_i(true);
         self.set_register(15, SWI_VEC);
+    }
+
+    fn undefined_interrupt(&mut self) {
+        self.und_register_bank[1] = self.get_register(15).wrapping_add(4);
+        self.und_spsr.raw = self.cpsr.raw;
+        self.cpsr.set_mode(OperatingMode::Undefined);
+        self.cpsr.set_t(false);
+        self.cpsr.set_i(true);
+        self.set_register(15, UND_VEC);
     }
 
     // Decodes a 12-bit operand to a register shifted by an immediate- or register-defined value
