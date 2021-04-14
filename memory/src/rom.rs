@@ -1,17 +1,17 @@
 use crate::Memory;
 
 pub struct ROM<const LENGTH: usize> {
-    memory: [u8; LENGTH],
+    memory: Vec<u8>,
 }
 
 impl<const LENGTH: usize> ROM<LENGTH> {
     pub fn new() -> Self {
         Self {
-            memory: [0; LENGTH],
+            memory: vec![0; LENGTH],
         }
     }
 
-    pub fn flash(&mut self, data: [u8; LENGTH]) {
+    pub fn flash(&mut self, data: Vec<u8>) {
         self.memory = data;
     }
 }
