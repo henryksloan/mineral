@@ -39,8 +39,13 @@ pub struct CPU {
     und_register_bank: [u32; 2],
 
     pub bios_rom: ROM<0x4000>,
-    ewram: RAM<0x40000>, // Internal work ram
-    iwram: RAM<0x8000>,  // External work ram
+    ewram: RAM<0x40000>,         // Internal work RAM
+    iwram: RAM<0x8000>,          // External work RAM
+    pub vram: RAM<0x18000>,      // VRAM, TODO: This should be in a separate struct
+    pub palette_ram: RAM<0x400>, // Palette RAM, TODO: This should be in a separate struct
+
+    cycles: u64, // TODO: Temporary
+    log: bool,
 }
 
 impl CPU {
@@ -53,8 +58,6 @@ impl CPU {
             irq_spsr: StatusRegister::new(),
             und_spsr: StatusRegister::new(),
 
-            // Each mode has r13 and r14 banked, allowing for private SP and LR
-            // FIQ mode additionally has r8-r12 banked
             registers: [0; 16],
             fiq_register_bank: [0; 7],
             svc_register_bank: [0; 2],
@@ -63,8 +66,13 @@ impl CPU {
             und_register_bank: [0; 2],
 
             bios_rom: ROM::new(),
-            ewram: RAM::new(), // Internal work ram
-            iwram: RAM::new(), // External work ram
+            ewram: RAM::new(),
+            iwram: RAM::new(),
+            vram: RAM::new(),
+            palette_ram: RAM::new(),
+
+            cycles: 0,
+            log: false,
         }
     }
 
@@ -76,10 +84,20 @@ impl CPU {
         let encoding = self.read_u32(pc as usize);
         let instr_type = InstructionType::from_encoding(encoding);
         let condition = Condition::from_u8(((encoding >> 28) & 0xF) as u8);
-        println!(
-            "{:8X}: {:8X} {:?} {:?} {:b}",
-            pc, encoding, instr_type, condition, self.cpsr.raw
-        );
+
+        if self.log {
+            println!(
+                "{:8X}: {:8X} {:?} {:?} status={:08X} {:8X}",
+                pc,
+                encoding,
+                instr_type,
+                condition,
+                self.cpsr.raw,
+                self.get_register(0)
+            );
+        }
+
+        self.set_register(15, self.get_register(15).wrapping_add(4));
 
         if self.eval_condition(condition) {
             match instr_type {
@@ -103,10 +121,7 @@ impl CPU {
             }
         }
 
-        // TODO: I think it might be better to increment this before execution
-        // I think that's how it would work with a pipeline, anyway
-        // If changed, remember to modify the destination of branch instr's
-        self.set_register(15, self.get_register(15).wrapping_add(4));
+        self.cycles += 1;
     }
 
     fn eval_condition(&self, condition: Condition) -> bool {
@@ -253,7 +268,7 @@ impl CPU {
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let base_reg = self
             .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 { 8 } else { 0 });
+            .wrapping_add(if base_reg_n == 15 { 4 } else { 0 });
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if (encoding >> 22) & 1 == 1 {
@@ -312,7 +327,7 @@ impl CPU {
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let base_reg = self
             .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 { 8 } else { 0 });
+            .wrapping_add(if base_reg_n == 15 { 4 } else { 0 });
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if reg_offset_flag {
@@ -385,9 +400,9 @@ impl CPU {
                 // If the PC is used as an operand, prefetching causes it to be higher
                 // by an amount depending on whether the shift is specified directly or by a register
                 if imm_flag {
-                    8
+                    4
                 } else {
-                    12
+                    8
                 }
             } else {
                 0
@@ -395,7 +410,7 @@ impl CPU {
 
         // http://vision.gel.ulaval.ca/~jflalonde/cours/1001/h17/docs/arm-instructionset.pdf pages 4-12 through 4-15
         // TODO: PC is supposed to produce lots of special cases
-        let (op2, shifter_carry) = if imm_flag {
+        let (op2, mut shifter_carry) = if imm_flag {
             self.rotated_imm_operand(encoding & 0xFFF)
         } else {
             self.shifted_reg_operand(encoding & 0xFFF, true)
@@ -439,6 +454,51 @@ impl CPU {
             0b1110 => (op1_reg & !op2, None, true), // BIC
             0b1111 | _ => (!op2, None, true),      // MVN
         };
+
+        // Check for carry for arithmetic instructions
+        // TODO: Could this be wrapped into check_overflow?
+        if opcode == 0b1010 || opcode == 0b0010 {
+            shifter_carry = !op1_reg.checked_sub(op2).is_none();
+        } else if opcode == 0b01011 || opcode == 0b0100 {
+            shifter_carry = op1_reg.checked_add(op2).is_none();
+        } else if opcode == 0b0011 {
+            shifter_carry = !op2.checked_sub(op1_reg).is_none();
+        } else if opcode == 0b0101 {
+            shifter_carry = op1_reg.checked_add(op2).is_none()
+                || op1_reg
+                    .checked_add(op2)
+                    .unwrap()
+                    .checked_add(carry)
+                    .is_none();
+        } else if opcode == 0b0110 {
+            shifter_carry = !op1_reg.checked_add(op2).is_none()
+                || op1_reg
+                    .checked_sub(op2)
+                    .unwrap()
+                    .checked_add(carry)
+                    .is_none()
+                || op1_reg
+                    .checked_sub(op2)
+                    .unwrap()
+                    .checked_add(carry)
+                    .unwrap()
+                    .checked_sub(1)
+                    .is_none();
+        } else if opcode == 0b0111 {
+            shifter_carry = !op2.checked_add(op1_reg).is_none()
+                || op2
+                    .checked_sub(op1_reg)
+                    .unwrap()
+                    .checked_add(carry)
+                    .is_none()
+                || op2
+                    .checked_sub(op1_reg)
+                    .unwrap()
+                    .checked_add(carry)
+                    .unwrap()
+                    .checked_sub(1)
+                    .is_none();
+        }
 
         if write_result {
             self.set_register(dest_reg_n, result);
@@ -498,8 +558,11 @@ impl CPU {
             let spsr = self
                 .get_mode_spsr()
                 .expect("attempted to get SPSR in non-privileged mode");
-            (*spsr).raw &= mask;
+            (*spsr).raw &= !mask;
             (*spsr).raw |= val & mask;
+        } else {
+            self.cpsr.raw &= !mask;
+            self.cpsr.raw |= val & mask;
         }
     }
 
@@ -603,7 +666,7 @@ impl CPU {
     // Returns (shifted result, barrel shifter carry out)
     fn shifted_reg_operand(&self, operand: u32, allow_shift_by_reg: bool) -> (u32, bool) {
         let op2_reg_n = (operand & 0b1111) as usize;
-        let op2_reg = self.get_register(op2_reg_n) + if op2_reg_n == 15 { 8 } else { 0 };
+        let op2_reg = self.get_register(op2_reg_n) + if op2_reg_n == 15 { 4 } else { 0 };
 
         let shift_by_reg = (operand >> 4) & 1 == 1;
         let shift_amount = if allow_shift_by_reg && shift_by_reg {
@@ -704,6 +767,22 @@ impl CPU {
 // It would make sense if reading a 32-bit address that contained two registers read both
 // But reading a byte within a 16-bit register wouldn't happen physically (?)
 impl Memory for CPU {
+    fn read_u16(&mut self, addr: usize) -> u16 {
+        if (0x04000000..=0x040003FE).contains(&addr) {
+            // TODO: read_u32 and read_u16 (same for write) should only capture particular
+            // registers, to allow for 32- and 16-bit registers
+            if addr == 0x04000006 {
+                (((self.cycles / 1232) % 228) as u16) & 0xFF
+            } else {
+                0 // TODO
+            }
+        } else {
+            let lo = self.read(addr) as u16;
+            let hi = self.read(addr + 1) as u16;
+            (hi << 8) | lo
+        }
+    }
+
     // TODO: When do reads have side-effects?
     // kevtris says open bus, link port reg's, RX errors, joybus RX
     fn peek(&self, addr: usize) -> u8 {
@@ -714,7 +793,25 @@ impl Memory for CPU {
             0x04000000..=0x040003FE => {
                 0 // TODO
             }
+            0x05000000..=0x050003FF => self.palette_ram.peek(addr - 0x05000000),
+            0x06000000..=0x06017FFF => self.vram.peek(addr - 0x06000000),
+            0x08000000..=0x0DFFFFFF => {
+                println!("Read gamepak!");
+                0
+            }
             _ => 0, // TODO: What to do here?
+        }
+    }
+
+    fn write_u16(&mut self, addr: usize, data: u16) {
+        if (0x04000000..=0x040003FE).contains(&addr) {
+            println!("write_u16 register {:8X}: data {:8X}", addr, data);
+            // TODO
+        } else {
+            let hi = (data >> 8) as u8;
+            let lo = (data & 0xff) as u8;
+            self.write(addr, lo);
+            self.write(addr + 1, hi);
         }
     }
 
@@ -722,9 +819,8 @@ impl Memory for CPU {
         match addr {
             0x02000000..=0x0203FFFF => self.ewram.write(addr - 0x02000000, data),
             0x03000000..=0x0307FFFF => self.iwram.write(addr - 0x03000000, data),
-            0x04000000..=0x040003FE => {
-                // TODO
-            }
+            0x05000000..=0x050003FF => self.palette_ram.write(addr - 0x05000000, data),
+            0x06000000..=0x06017FFF => self.vram.write(addr - 0x06000000, data),
             _ => {} // TODO: What to do here?
         }
     }
