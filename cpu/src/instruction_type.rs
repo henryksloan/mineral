@@ -64,8 +64,7 @@ impl InstructionType {
     }
 
     // Translates a Thumb encoding to an equivalent ARM encoding
-    // Returns (instruction_type, TODO)
-    pub fn from_thumb_encoding(thumb_encoding: u16) -> Self {
+    pub fn from_thumb_encoding(thumb_encoding: u16) -> u32 {
         let mut allow_update_flags = true;
 
         // TODO: Some of these don't update flags!
@@ -144,7 +143,7 @@ impl InstructionType {
             }
         } else if hi_n(8) == 0b01000111 {
             // Branch/exchange instruction set
-            let link = (encoding >> 7) & 1 == 1;
+            let link = (encoding >> 7) & 1;
             let reg = (encoding >> 3) & 0b1111;
             // TODO: BX behaves differently when with reg=15
             (0b1110000100101111111111110001 << 4) | (link << 5) | reg
@@ -178,32 +177,104 @@ impl InstructionType {
             let offset = (encoding >> 6) & 0b11111;
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
-            (0b111001011 << 23) | (load << 20) | (byte << 22) | (rn << 16) | (rd << 12) | offset
+            (0b111001011000 << 20) | (load << 20) | (byte << 22) | (rn << 16) | (rd << 12) | offset
         } else if hi_n(4) == 0b1000 {
             // Load/store halfword immediate offset
+            let load = (encoding >> 11) & 1;
+            let immed_hi = (encoding >> 9) & 0b11;
+            let immed_lo = (encoding >> 6) & 0b111;
+            let rn = (encoding >> 3) & 0b111;
+            let rd = encoding & 0b111;
+            (0b111000011100 << 20)
+                | (load << 20)
+                | (rn << 16)
+                | (rd << 12)
+                | (immed_hi << 8)
+                | (0b1011 << 4)
+                | (immed_lo << 1)
         } else if hi_n(4) == 0b1001 {
             // Load/store to/from stack
+            let load = (encoding >> 11) & 1;
+            let rd = (encoding >> 8) & 0b111;
+            let immed_8 = encoding & 0xFF;
+            (0b1110010110001101 << 16) | (load << 20) | (rd << 12) | (immed_8 << 2)
         } else if hi_n(4) == 0b1010 {
             // Add to SP or PC
+            let pc_flag = 1 - ((encoding >> 11) & 1);
+            let rd = (encoding >> 8) & 0b111;
+            let immed_8 = encoding & 0xFF;
+            (0b1110001010001101 << 16) | (pc_flag << 17) | (rd << 12) | (0b1111 << 8) | immed_8
         } else if hi_n(4) == 0b1011 {
             // Miscellaneous
+            let instr_type = (encoding >> 9) & 0b11;
+            if instr_type == 0b00 {
+                // Adjust stack pointer
+                let op = (encoding >> 7) & 1;
+                let immed_7 = encoding & 0b1111111;
+                (0b1110001000001101110111110 << 7) | (1 << (23 - op)) | immed_7
+            } else if instr_type == 0b10 {
+                // Push/pop register list
+                let pop_flag = (encoding >> 11) & 1;
+                let lr_flag = (encoding >> 8) & 1;
+                let reg_list = encoding & 0xFF;
+                let hi_8 = if pop_flag == 0 {
+                    0b10001011
+                } else {
+                    0b10010010
+                };
+                (0b1110 << 28)
+                    | (hi_8 << 20)
+                    | (0b1101 << 16)
+                    | (lr_flag << (14 + pop_flag))
+                    | reg_list
+            } else {
+                // Undefined
+                (0b1110001 << 25) | (1 << 4)
+            }
         } else if hi_n(4) == 0b1100 {
             // Load/store multiple
+            let load_flag = (encoding >> 11) & 1;
+            let rn = (encoding >> 8) & 0b111;
+            let reg_list = encoding & 0xFF;
+            // Don't write back if doing a load with rn in the register list
+            let write_back = (load_flag == 0 || ((reg_list >> rn) == 0)) as u32;
+            (0b111010001000 << 20) | (write_back << 21) | (load_flag << 20) | (rn << 16) | reg_list
         } else if hi_n(4) == 0b1101 && (encoding >> 9) & 0b111 != 0b111 {
             // Conditional branch
+            let cond = (encoding >> 8) & 0b1111;
+            let immed_8 = encoding & 0xFF;
+            let sign_ext = if (immed_8 >> 7) & 1 == 1 { 0xFFFF } else { 0 };
+            (cond << 28) | (0b1010 << 24) | (sign_ext << 8) | immed_8
         } else if hi_n(8) == 0b11011110 {
             // Undefined instruction
+            (0b1110001 << 25) | (1 << 4)
         } else if hi_n(8) == 0b11011111 {
             // Software interrupt
-        } else if hi_n(5) == 0b11100 {
-            // Unconditional branch
-        } else if hi_n(5) == 0b11101 {
-            // Undefined instruction prior to ARMv5
-        } else if hi_n(5) == 0b11110 {
-            // BL/BLX prefix
-        } else if hi_n(5) == 0b11111 {
-            // BL suffix
+            let immed_8 = encoding & 0xFF;
+            (0b11101111 << 24) | immed_8
+        } else if (hi_n(5) | 0b11) == 0b11111 {
+            match (encoding >> 11) & 0b11 {
+                0b00 => {
+                    // Unconditional branch
+                    let immed_11 = encoding & 0b11111111111;
+                    let sign_ext = if (immed_11 >> 10) & 1 == 1 {
+                        0b1111111111111
+                    } else {
+                        0
+                    };
+                    (0b11101010 << 24) | (sign_ext << 11) | immed_11
+                }
+                0b01 => {
+                    // Undefined
+                    (0b1110001 << 25) | (1 << 4)
+                }
+                0b10 => {
+                    // BL prefix
+                }
+                0b11 => {
+                    // BL suffix
+                }
+            }
         }
-        Self::Undefined // TODO: Remove!
     }
 }

@@ -634,6 +634,7 @@ impl CPU {
             self.set_register(14, self.get_register(15));
         }
 
+        // TODO: Branch must use a different shift in thumb mode
         let mut offset = (encoding & 0xFFFFFF) << 2; // 24 bits, shifted left
         if (offset >> 23) & 1 == 1 {
             offset |= 0xFF_000000; // Sign extend
