@@ -78,11 +78,21 @@ impl CPU {
 
     pub fn tick(&mut self) {
         // TODO: Implement 3-stage pipeline
-        // In ARM mode, the bottom two bytes of the PC aren't used, so PC selects a word
-        // TODO: In Thumb mode, only the bottom bit is unused
-        let pc = self.get_register(15) & !0b11;
-        let encoding = self.read_u32(pc as usize);
-        let instr_type = InstructionType::from_encoding(encoding);
+        let (pc, encoding, instr_type) = if self.cpsr.get_t() {
+            // Thumb mode
+            // In Thumb mode, only the bottom bit is unused
+            let pc = self.get_register(15) & !0b1;
+            let encoding = self.read_u16(pc as usize);
+            let (instr_type, translated) = InstructionType::from_thumb_encoding(encoding);
+            (pc, translated, instr_type)
+        } else {
+            // ARM mode
+            // In ARM mode, the bottom two bytes of the PC aren't used, so PC selects a word
+            let pc = self.get_register(15) & !0b11;
+            let encoding = self.read_u32(pc as usize);
+            let instr_type = InstructionType::from_encoding(encoding);
+            (pc, encoding, instr_type)
+        };
         let condition = Condition::from_u8(((encoding >> 28) & 0xF) as u8);
 
         if self.log {
@@ -97,7 +107,11 @@ impl CPU {
             );
         }
 
-        self.set_register(15, self.get_register(15).wrapping_add(4));
+        if self.cpsr.get_t() {
+            self.set_register(15, self.get_register(15).wrapping_add(2));
+        } else {
+            self.set_register(15, self.get_register(15).wrapping_add(4));
+        }
 
         if self.eval_condition(condition) {
             match instr_type {
@@ -118,6 +132,9 @@ impl CPU {
                 InstructionType::CoprocOperation => {}
                 InstructionType::CoprocRegOperation => {}
                 InstructionType::SoftwareInterrupt => self.software_interrupt(),
+
+                InstructionType::ThumbBranchPrefix => self.thumb_branch_prefix(encoding as u16),
+                InstructionType::ThumbBranchSuffix => self.thumb_branch_suffix(encoding as u16),
             }
         }
 
@@ -643,6 +660,27 @@ impl CPU {
             15,
             self.get_register(15).wrapping_add(offset).wrapping_add(4),
         );
+    }
+
+    fn thumb_branch_prefix(&mut self, encoding: u16) {
+        let offset = {
+            let offset_11 = (encoding & 0b11111111111) as u32;
+            let shifted = offset_11 << 12;
+            let sign_ext = if (shifted >> 22) & 1 == 1 {
+                0b111111111
+            } else {
+                0
+            };
+            (sign_ext << 23) | shifted
+        };
+        self.set_register(14, self.get_register(15).wrapping_add(offset))
+    }
+
+    fn thumb_branch_suffix(&mut self, encoding: u16) {
+        let offset = (encoding & 0b11111111111) as u32;
+        let pc_next_instr = self.get_register(15);
+        self.set_register(15, self.get_register(14).wrapping_add(offset << 1));
+        self.set_register(14, pc_next_instr | 1);
     }
 
     fn software_interrupt(&mut self) {

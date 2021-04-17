@@ -16,6 +16,9 @@ pub enum InstructionType {
     CoprocOperation,
     CoprocRegOperation,
     SoftwareInterrupt,
+
+    ThumbBranchPrefix,
+    ThumbBranchSuffix,
 }
 
 impl InstructionType {
@@ -64,13 +67,16 @@ impl InstructionType {
     }
 
     // Translates a Thumb encoding to an equivalent ARM encoding
-    pub fn from_thumb_encoding(thumb_encoding: u16) -> u32 {
-        let mut allow_update_flags = true;
-
+    // Returns (instruction type, translated encoding)
+    pub fn from_thumb_encoding(thumb_encoding: u16) -> (Self, u32) {
         // TODO: Some of these don't update flags!
+        let mut allow_update_flags = true;
+        // Allows for instructions without a direct translation in ARM mode
+        let mut special_type_opt: Option<InstructionType> = None;
+
         let encoding = thumb_encoding as u32;
         let hi_n = |n: usize| (encoding >> (16 - n)) & ((1 << n) - 1);
-        if hi_n(3) == 0b000 && (encoding >> 11) & 0b11 != 0b11 {
+        let translated = if hi_n(3) == 0b000 && (encoding >> 11) & 0b11 != 0b11 {
             // Shift by immediate
             let immed_5 = (encoding >> 6) & 0b11111;
             let rm = (encoding >> 3) & 0b111;
@@ -160,14 +166,14 @@ impl InstructionType {
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
             let (hi_8, lo_4) = match op {
-                0b000 => (0b01111000, 0b0000), // STR
-                0b001 => (0b00011000, 0b1011), // STRH
-                0b010 => (0b01111100, 0b0000), // STRB
-                0b011 => (0b00011001, 0b1101), // LDRSB
-                0b100 => (0b01111001, 0b0000), // LDR
-                0b101 => (0b00011001, 0b1011), // LDRH
-                0b110 => (0b01111101, 0b0000), // LDRB
-                0b111 => (0b00011001, 0b1111), // LDRSH
+                0b000 => (0b01111000, 0b0000),     // STR
+                0b001 => (0b00011000, 0b1011),     // STRH
+                0b010 => (0b01111100, 0b0000),     // STRB
+                0b011 => (0b00011001, 0b1101),     // LDRSB
+                0b100 => (0b01111001, 0b0000),     // LDR
+                0b101 => (0b00011001, 0b1011),     // LDRH
+                0b110 => (0b01111101, 0b0000),     // LDRB
+                0b111 | _ => (0b00011001, 0b1111), // LDRSH
             };
             (0b1110 << 28) | (hi_8 << 20) | (rn << 16) | (rd << 12) | (lo_4 << 4) | rm
         } else if hi_n(3) == 0b011 {
@@ -270,11 +276,26 @@ impl InstructionType {
                 }
                 0b10 => {
                     // BL prefix
+                    special_type_opt = Some(InstructionType::ThumbBranchPrefix);
+                    thumb_encoding as u32
                 }
-                0b11 => {
+                0b11 | _ => {
                     // BL suffix
+                    special_type_opt = Some(InstructionType::ThumbBranchSuffix);
+                    thumb_encoding as u32
                 }
             }
-        }
+        } else {
+            // Undefined instruction
+            (0b1110001 << 25) | (1 << 4)
+        };
+
+        let instr_type = if let Some(special_type) = special_type_opt {
+            special_type
+        } else {
+            InstructionType::from_encoding(translated)
+        };
+
+        (instr_type, translated)
     }
 }
