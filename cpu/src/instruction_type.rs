@@ -81,7 +81,7 @@ impl InstructionType {
             let immed_5 = (encoding >> 6) & 0b11111;
             let rm = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
-            let shift_type = (encoding >> 11) ^ 0b11;
+            let shift_type = (encoding >> 11) & 0b11;
             // MOVS <Rd>, <Rm>, <shift_type> #<immed_5>
             (0b1110000110110000 << 16) | (rd << 12) | (immed_5 << 7) | (shift_type << 5) | rm
         } else if hi_n(6) == 0b000110 {
@@ -91,7 +91,7 @@ impl InstructionType {
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
             // ADDS/SUBS <Rd>, <Rn>, <Rm>
-            (0b111000000001 << 20) | (1 << (22 + op)) | (rn << 16) | (rd << 12) | rm
+            (0b111000000001 << 20) | (1 << (23 - op)) | (rn << 16) | (rd << 12) | rm
         } else if hi_n(6) == 0b000111 {
             // Add/subtract immediate
             let op = (encoding >> 9) & 1;
@@ -104,14 +104,14 @@ impl InstructionType {
             // Add/subtract/compare/move immediate
             let reg = (encoding >> 8) & 0b111;
             let immed_8 = encoding & 0xFF;
-            let op = match (encoding >> 11) & 0b11 {
-                0b00 => 0b1101,     // MOV
-                0b01 => 0b1010,     // CMP
-                0b10 => 0b0100,     // ADD
-                0b11 | _ => 0b0010, // SUB
+            let (op, a, b) = match (encoding >> 11) & 0b11 {
+                0b00 => (0b1101, 0, reg),       // MOV
+                0b01 => (0b1010, reg, 0),       // CMP
+                0b10 => (0b0100, reg, reg),     // ADD
+                0b11 | _ => (0b0010, reg, reg), // SUB
             };
             // ADDS/SUBS/MOVS/CMP <Rd>|<Rn>, #<8_bit_immed>
-            (0b111000100001 << 20) | (op << 21) | (reg << 16) | (reg << 12) | immed_8
+            (0b111000100001 << 20) | (op << 21) | (a << 16) | (b << 12) | immed_8
         } else if hi_n(6) == 0b010000 {
             // Data-processing register
             let op = (encoding >> 6) & 0b1111;

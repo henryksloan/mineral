@@ -285,7 +285,11 @@ impl CPU {
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let base_reg = self
             .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 { 4 } else { 0 });
+            .wrapping_add(if base_reg_n == 15 {
+                self.mode_instr_width()
+            } else {
+                0
+            });
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if (encoding >> 22) & 1 == 1 {
@@ -344,7 +348,11 @@ impl CPU {
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let base_reg = self
             .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 { 4 } else { 0 });
+            .wrapping_add(if base_reg_n == 15 {
+                self.mode_instr_width()
+            } else {
+                0
+            });
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if reg_offset_flag {
@@ -416,11 +424,7 @@ impl CPU {
             .wrapping_add(if op1_reg_n == 15 {
                 // If the PC is used as an operand, prefetching causes it to be higher
                 // by an amount depending on whether the shift is specified directly or by a register
-                if imm_flag {
-                    4
-                } else {
-                    8
-                }
+                self.mode_instr_width() * if imm_flag { 1 } else { 2 }
             } else {
                 0
             });
@@ -652,13 +656,15 @@ impl CPU {
         }
 
         // TODO: Branch must use a different shift in thumb mode
-        let mut offset = (encoding & 0xFFFFFF) << 2; // 24 bits, shifted left
+        let mut offset = (encoding & 0xFFFFFF) << if self.cpsr.get_t() { 1 } else { 2 }; // 24 bits, shifted left
         if (offset >> 23) & 1 == 1 {
             offset |= 0xFF_000000; // Sign extend
         }
         self.set_register(
             15,
-            self.get_register(15).wrapping_add(offset).wrapping_add(4),
+            self.get_register(15)
+                .wrapping_add(offset)
+                .wrapping_add(if self.cpsr.get_t() { 2 } else { 4 }),
         );
     }
 
@@ -705,7 +711,12 @@ impl CPU {
     // Returns (shifted result, barrel shifter carry out)
     fn shifted_reg_operand(&self, operand: u32, allow_shift_by_reg: bool) -> (u32, bool) {
         let op2_reg_n = (operand & 0b1111) as usize;
-        let op2_reg = self.get_register(op2_reg_n) + if op2_reg_n == 15 { 4 } else { 0 };
+        let op2_reg = self.get_register(op2_reg_n)
+            + if op2_reg_n == 15 {
+                self.mode_instr_width()
+            } else {
+                0
+            };
 
         let shift_by_reg = (operand >> 4) & 1 == 1;
         let shift_amount = if allow_shift_by_reg && shift_by_reg {
@@ -792,6 +803,15 @@ impl CPU {
         (shifter_operand, shifter_carry)
     }
 
+    // Returns the bitwidth of a single instruction of either ARM or Thumb mode
+    fn mode_instr_width(&self) -> u32 {
+        if self.cpsr.get_t() {
+            2
+        } else {
+            4
+        }
+    }
+
     // Checks whether an add or subtract has resulted in overflow
     fn did_overflow(op1: u32, op2: u32, result: u32) -> bool {
         let op1_sign = (op1 >> 31) & 1 == 1;
@@ -822,8 +842,6 @@ impl Memory for CPU {
         }
     }
 
-    // TODO: When do reads have side-effects?
-    // kevtris says open bus, link port reg's, RX errors, joybus RX
     fn peek(&self, addr: usize) -> u8 {
         match addr {
             0x00000000..=0x00003FFF => self.bios_rom.peek(addr),
