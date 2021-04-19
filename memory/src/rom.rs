@@ -12,7 +12,8 @@ impl<const LENGTH: usize> ROM<LENGTH> {
     }
 
     pub fn flash(&mut self, data: Vec<u8>) {
-        self.memory = data;
+        self.memory = vec![0; LENGTH];
+        self.memory[..data.len()].clone_from_slice(&data);
     }
 }
 

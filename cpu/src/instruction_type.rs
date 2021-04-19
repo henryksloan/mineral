@@ -223,7 +223,7 @@ impl InstructionType {
                 let pop_flag = (encoding >> 11) & 1;
                 let lr_flag = (encoding >> 8) & 1;
                 let reg_list = encoding & 0xFF;
-                let hi_8 = if pop_flag == 0 {
+                let hi_8 = if pop_flag == 1 {
                     0b10001011
                 } else {
                     0b10010010

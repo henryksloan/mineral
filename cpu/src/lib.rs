@@ -43,6 +43,7 @@ pub struct CPU {
     iwram: RAM<0x8000>,          // External work RAM
     pub vram: RAM<0x18000>,      // VRAM, TODO: This should be in a separate struct
     pub palette_ram: RAM<0x400>, // Palette RAM, TODO: This should be in a separate struct
+    pub cart_rom: ROM<0x400000>, // Cartridge ROM, TODO: This shouldn't be here
 
     cycles: u64, // TODO: Temporary
     log: bool,
@@ -70,6 +71,7 @@ impl CPU {
             iwram: RAM::new(),
             vram: RAM::new(),
             palette_ram: RAM::new(),
+            cart_rom: ROM::new(),
 
             cycles: 0,
             log: false,
@@ -93,18 +95,28 @@ impl CPU {
             let instr_type = InstructionType::from_encoding(encoding);
             (pc, encoding, instr_type)
         };
-        let condition = Condition::from_u8(((encoding >> 28) & 0xF) as u8);
+        let condition = match instr_type {
+            InstructionType::ThumbBranchPrefix | InstructionType::ThumbBranchSuffix => {
+                Condition::AL
+            }
+            _ => Condition::from_u8(((encoding >> 28) & 0xF) as u8),
+        };
 
         if self.log {
-            println!(
-                "{:8X}: {:8X} {:?} {:?} status={:08X} {:8X}",
+            print!(
+                "{:08X}: {:08X} {:<19} {:?} {:08X} {:08X?}",
                 pc,
                 encoding,
-                instr_type,
+                format!("{:?}", instr_type),
                 condition,
                 self.cpsr.raw,
-                self.get_register(0)
+                (0..16).map(|i| self.get_register(i)).collect::<Vec<u32>>()
             );
+            if self.cpsr.get_t() {
+                println!(" THUMB({:04X})", self.read_u16(pc as usize));
+            } else {
+                println!();
+            }
         }
 
         if self.cpsr.get_t() {
@@ -346,13 +358,14 @@ impl CPU {
         let load_flag = (encoding >> 20) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
-        let base_reg = self
-            .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 {
-                self.mode_instr_width()
-            } else {
-                0
-            });
+        let base_reg = {
+            let mut val = self.get_register(base_reg_n);
+            if base_reg_n == 15 {
+                val = val.wrapping_add(self.mode_instr_width());
+                val &= !0b11;
+            }
+            val
+        };
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if reg_offset_flag {
@@ -679,7 +692,10 @@ impl CPU {
             };
             (sign_ext << 23) | shifted
         };
-        self.set_register(14, self.get_register(15).wrapping_add(offset))
+        self.set_register(
+            14,
+            self.get_register(15).wrapping_add(offset).wrapping_add(2),
+        )
     }
 
     fn thumb_branch_suffix(&mut self, encoding: u16) {
@@ -690,16 +706,16 @@ impl CPU {
     }
 
     fn software_interrupt(&mut self) {
-        self.svc_register_bank[1] = self.get_register(15).wrapping_add(4);
+        self.svc_register_bank[1] = self.get_register(15) & !0b1;
         self.svc_spsr.raw = self.cpsr.raw;
-        self.cpsr.set_mode(OperatingMode::System);
+        self.cpsr.set_mode(OperatingMode::Supervisor);
         self.cpsr.set_t(false);
         self.cpsr.set_i(true);
         self.set_register(15, SWI_VEC);
     }
 
     fn undefined_interrupt(&mut self) {
-        self.und_register_bank[1] = self.get_register(15).wrapping_add(4);
+        self.und_register_bank[1] = self.get_register(15) & !0b1;
         self.und_spsr.raw = self.cpsr.raw;
         self.cpsr.set_mode(OperatingMode::Undefined);
         self.cpsr.set_t(false);
@@ -831,7 +847,7 @@ impl Memory for CPU {
             // TODO: read_u32 and read_u16 (same for write) should only capture particular
             // registers, to allow for 32- and 16-bit registers
             if addr == 0x04000006 {
-                (((self.cycles / 1232) % 228) as u16) & 0xFF
+                (((self.cycles / 1232) % 228) as u16) & 0xFFFF
             } else {
                 0 // TODO
             }
@@ -848,13 +864,18 @@ impl Memory for CPU {
             0x02000000..=0x0203FFFF => self.ewram.peek(addr - 0x02000000),
             0x03000000..=0x0307FFFF => self.iwram.peek(addr - 0x03000000),
             0x04000000..=0x040003FE => {
-                0 // TODO
+                if addr == 0x04000006 {
+                    (((self.cycles / 1232) % 228) as u8) & 0xFF
+                } else {
+                    0 // TODO
+                }
             }
             0x05000000..=0x050003FF => self.palette_ram.peek(addr - 0x05000000),
             0x06000000..=0x06017FFF => self.vram.peek(addr - 0x06000000),
             0x08000000..=0x0DFFFFFF => {
-                println!("Read gamepak!");
-                0
+                // println!("Read gamepak!");
+                // 0
+                self.cart_rom.peek((addr - 0x08000000) % 0x400000)
             }
             _ => 0, // TODO: What to do here?
         }
