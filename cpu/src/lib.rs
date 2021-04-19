@@ -39,8 +39,14 @@ pub struct CPU {
     und_register_bank: [u32; 2],
 
     pub bios_rom: ROM<0x4000>,
-    ewram: RAM<0x40000>, // Internal work ram
-    iwram: RAM<0x8000>,  // External work ram
+    ewram: RAM<0x40000>,         // Internal work RAM
+    iwram: RAM<0x8000>,          // External work RAM
+    pub vram: RAM<0x18000>,      // VRAM, TODO: This should be in a separate struct
+    pub palette_ram: RAM<0x400>, // Palette RAM, TODO: This should be in a separate struct
+    pub cart_rom: ROM<0x400000>, // Cartridge ROM, TODO: This shouldn't be here
+
+    cycles: u64, // TODO: Temporary
+    log: bool,
 }
 
 impl CPU {
@@ -53,8 +59,6 @@ impl CPU {
             irq_spsr: StatusRegister::new(),
             und_spsr: StatusRegister::new(),
 
-            // Each mode has r13 and r14 banked, allowing for private SP and LR
-            // FIQ mode additionally has r8-r12 banked
             registers: [0; 16],
             fiq_register_bank: [0; 7],
             svc_register_bank: [0; 2],
@@ -63,23 +67,63 @@ impl CPU {
             und_register_bank: [0; 2],
 
             bios_rom: ROM::new(),
-            ewram: RAM::new(), // Internal work ram
-            iwram: RAM::new(), // External work ram
+            ewram: RAM::new(),
+            iwram: RAM::new(),
+            vram: RAM::new(),
+            palette_ram: RAM::new(),
+            cart_rom: ROM::new(),
+
+            cycles: 0,
+            log: false,
         }
     }
 
     pub fn tick(&mut self) {
         // TODO: Implement 3-stage pipeline
-        // In ARM mode, the bottom two bytes of the PC aren't used, so PC selects a word
-        // TODO: In Thumb mode, only the bottom bit is unused
-        let pc = self.get_register(15) & !0b11;
-        let encoding = self.read_u32(pc as usize);
-        let instr_type = InstructionType::from_encoding(encoding);
-        let condition = Condition::from_u8(((encoding >> 28) & 0xF) as u8);
-        println!(
-            "{:8X}: {:8X} {:?} {:?} {:b}",
-            pc, encoding, instr_type, condition, self.cpsr.raw
-        );
+        let (pc, encoding, instr_type) = if self.cpsr.get_t() {
+            // Thumb mode
+            // In Thumb mode, only the bottom bit is unused
+            let pc = self.get_register(15) & !0b1;
+            let encoding = self.read_u16(pc as usize);
+            let (instr_type, translated) = InstructionType::from_thumb_encoding(encoding);
+            (pc, translated, instr_type)
+        } else {
+            // ARM mode
+            // In ARM mode, the bottom two bytes of the PC aren't used, so PC selects a word
+            let pc = self.get_register(15) & !0b11;
+            let encoding = self.read_u32(pc as usize);
+            let instr_type = InstructionType::from_encoding(encoding);
+            (pc, encoding, instr_type)
+        };
+        let condition = match instr_type {
+            InstructionType::ThumbBranchPrefix | InstructionType::ThumbBranchSuffix => {
+                Condition::AL
+            }
+            _ => Condition::from_u8(((encoding >> 28) & 0xF) as u8),
+        };
+
+        if self.log {
+            print!(
+                "{:08X}: {:08X} {:<19} {:?} {:08X} {:08X?}",
+                pc,
+                encoding,
+                format!("{:?}", instr_type),
+                condition,
+                self.cpsr.raw,
+                (0..16).map(|i| self.get_register(i)).collect::<Vec<u32>>()
+            );
+            if self.cpsr.get_t() {
+                println!(" THUMB({:04X})", self.read_u16(pc as usize));
+            } else {
+                println!();
+            }
+        }
+
+        if self.cpsr.get_t() {
+            self.set_register(15, self.get_register(15).wrapping_add(2));
+        } else {
+            self.set_register(15, self.get_register(15).wrapping_add(4));
+        }
 
         if self.eval_condition(condition) {
             match instr_type {
@@ -100,13 +144,13 @@ impl CPU {
                 InstructionType::CoprocOperation => {}
                 InstructionType::CoprocRegOperation => {}
                 InstructionType::SoftwareInterrupt => self.software_interrupt(),
+
+                InstructionType::ThumbBranchPrefix => self.thumb_branch_prefix(encoding as u16),
+                InstructionType::ThumbBranchSuffix => self.thumb_branch_suffix(encoding as u16),
             }
         }
 
-        // TODO: I think it might be better to increment this before execution
-        // I think that's how it would work with a pipeline, anyway
-        // If changed, remember to modify the destination of branch instr's
-        self.set_register(15, self.get_register(15).wrapping_add(4));
+        self.cycles += 1;
     }
 
     fn eval_condition(&self, condition: Condition) -> bool {
@@ -135,14 +179,14 @@ impl CPU {
         if n == 13 || n == 14 {
             match mode {
                 OperatingMode::User | OperatingMode::System => self.registers[n],
-                OperatingMode::FastInterrupt => self.fiq_register_bank[n],
-                OperatingMode::Interrupt => self.irq_register_bank[n],
-                OperatingMode::Supervisor => self.svc_register_bank[n],
-                OperatingMode::Abort => self.abt_register_bank[n],
-                OperatingMode::Undefined => self.und_register_bank[n],
+                OperatingMode::FastInterrupt => self.fiq_register_bank[n - 8],
+                OperatingMode::Interrupt => self.irq_register_bank[n - 13],
+                OperatingMode::Supervisor => self.svc_register_bank[n - 13],
+                OperatingMode::Abort => self.abt_register_bank[n - 13],
+                OperatingMode::Undefined => self.und_register_bank[n - 13],
             }
         } else if mode == OperatingMode::FastInterrupt && n >= 8 && n <= 14 {
-            self.fiq_register_bank[n]
+            self.fiq_register_bank[n - 8]
         } else {
             self.registers[n]
         }
@@ -153,14 +197,14 @@ impl CPU {
         if n == 13 || n == 14 {
             match mode {
                 OperatingMode::User | OperatingMode::System => self.registers[n] = val,
-                OperatingMode::FastInterrupt => self.fiq_register_bank[n] = val,
-                OperatingMode::Interrupt => self.irq_register_bank[n] = val,
-                OperatingMode::Supervisor => self.svc_register_bank[n] = val,
-                OperatingMode::Abort => self.abt_register_bank[n] = val,
-                OperatingMode::Undefined => self.und_register_bank[n] = val,
+                OperatingMode::FastInterrupt => self.fiq_register_bank[n - 8] = val,
+                OperatingMode::Interrupt => self.irq_register_bank[n - 13] = val,
+                OperatingMode::Supervisor => self.svc_register_bank[n - 13] = val,
+                OperatingMode::Abort => self.abt_register_bank[n - 13] = val,
+                OperatingMode::Undefined => self.und_register_bank[n - 13] = val,
             }
         } else if mode == OperatingMode::FastInterrupt && n >= 8 && n <= 14 {
-            self.fiq_register_bank[n] = val
+            self.fiq_register_bank[n - 8] = val
         } else {
             self.registers[n] = val
         }
@@ -253,7 +297,11 @@ impl CPU {
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
         let base_reg = self
             .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 { 8 } else { 0 });
+            .wrapping_add(if base_reg_n == 15 {
+                self.mode_instr_width()
+            } else {
+                0
+            });
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if (encoding >> 22) & 1 == 1 {
@@ -310,9 +358,14 @@ impl CPU {
         let load_flag = (encoding >> 20) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
-        let base_reg = self
-            .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 { 8 } else { 0 });
+        let base_reg = {
+            let mut val = self.get_register(base_reg_n);
+            if base_reg_n == 15 {
+                val = val.wrapping_add(self.mode_instr_width());
+                val &= !0b11;
+            }
+            val
+        };
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if reg_offset_flag {
@@ -384,18 +437,14 @@ impl CPU {
             .wrapping_add(if op1_reg_n == 15 {
                 // If the PC is used as an operand, prefetching causes it to be higher
                 // by an amount depending on whether the shift is specified directly or by a register
-                if imm_flag {
-                    8
-                } else {
-                    12
-                }
+                self.mode_instr_width() * if imm_flag { 1 } else { 2 }
             } else {
                 0
             });
 
         // http://vision.gel.ulaval.ca/~jflalonde/cours/1001/h17/docs/arm-instructionset.pdf pages 4-12 through 4-15
         // TODO: PC is supposed to produce lots of special cases
-        let (op2, shifter_carry) = if imm_flag {
+        let (op2, mut shifter_carry) = if imm_flag {
             self.rotated_imm_operand(encoding & 0xFFF)
         } else {
             self.shifted_reg_operand(encoding & 0xFFF, true)
@@ -439,6 +488,51 @@ impl CPU {
             0b1110 => (op1_reg & !op2, None, true), // BIC
             0b1111 | _ => (!op2, None, true),      // MVN
         };
+
+        // Check for carry for arithmetic instructions
+        // TODO: Could this be wrapped into check_overflow?
+        if opcode == 0b1010 || opcode == 0b0010 {
+            shifter_carry = !op1_reg.checked_sub(op2).is_none();
+        } else if opcode == 0b01011 || opcode == 0b0100 {
+            shifter_carry = op1_reg.checked_add(op2).is_none();
+        } else if opcode == 0b0011 {
+            shifter_carry = !op2.checked_sub(op1_reg).is_none();
+        } else if opcode == 0b0101 {
+            shifter_carry = op1_reg.checked_add(op2).is_none()
+                || op1_reg
+                    .checked_add(op2)
+                    .unwrap()
+                    .checked_add(carry)
+                    .is_none();
+        } else if opcode == 0b0110 {
+            shifter_carry = !op1_reg.checked_add(op2).is_none()
+                || op1_reg
+                    .checked_sub(op2)
+                    .unwrap()
+                    .checked_add(carry)
+                    .is_none()
+                || op1_reg
+                    .checked_sub(op2)
+                    .unwrap()
+                    .checked_add(carry)
+                    .unwrap()
+                    .checked_sub(1)
+                    .is_none();
+        } else if opcode == 0b0111 {
+            shifter_carry = !op2.checked_add(op1_reg).is_none()
+                || op2
+                    .checked_sub(op1_reg)
+                    .unwrap()
+                    .checked_add(carry)
+                    .is_none()
+                || op2
+                    .checked_sub(op1_reg)
+                    .unwrap()
+                    .checked_add(carry)
+                    .unwrap()
+                    .checked_sub(1)
+                    .is_none();
+        }
 
         if write_result {
             self.set_register(dest_reg_n, result);
@@ -498,8 +592,11 @@ impl CPU {
             let spsr = self
                 .get_mode_spsr()
                 .expect("attempted to get SPSR in non-privileged mode");
-            (*spsr).raw &= mask;
+            (*spsr).raw &= !mask;
             (*spsr).raw |= val & mask;
+        } else {
+            self.cpsr.raw &= !mask;
+            self.cpsr.raw |= val & mask;
         }
     }
 
@@ -571,27 +668,54 @@ impl CPU {
             self.set_register(14, self.get_register(15));
         }
 
-        let mut offset = (encoding & 0xFFFFFF) << 2; // 24 bits, shifted left
+        // TODO: Branch must use a different shift in thumb mode
+        let mut offset = (encoding & 0xFFFFFF) << if self.cpsr.get_t() { 1 } else { 2 }; // 24 bits, shifted left
         if (offset >> 23) & 1 == 1 {
             offset |= 0xFF_000000; // Sign extend
         }
         self.set_register(
             15,
-            self.get_register(15).wrapping_add(offset).wrapping_add(4),
+            self.get_register(15)
+                .wrapping_add(offset)
+                .wrapping_add(if self.cpsr.get_t() { 2 } else { 4 }),
         );
     }
 
+    fn thumb_branch_prefix(&mut self, encoding: u16) {
+        let offset = {
+            let offset_11 = (encoding & 0b11111111111) as u32;
+            let shifted = offset_11 << 12;
+            let sign_ext = if (shifted >> 22) & 1 == 1 {
+                0b111111111
+            } else {
+                0
+            };
+            (sign_ext << 23) | shifted
+        };
+        self.set_register(
+            14,
+            self.get_register(15).wrapping_add(offset).wrapping_add(2),
+        )
+    }
+
+    fn thumb_branch_suffix(&mut self, encoding: u16) {
+        let offset = (encoding & 0b11111111111) as u32;
+        let pc_next_instr = self.get_register(15);
+        self.set_register(15, self.get_register(14).wrapping_add(offset << 1));
+        self.set_register(14, pc_next_instr | 1);
+    }
+
     fn software_interrupt(&mut self) {
-        self.svc_register_bank[1] = self.get_register(15).wrapping_add(4);
+        self.svc_register_bank[1] = self.get_register(15) & !0b1;
         self.svc_spsr.raw = self.cpsr.raw;
-        self.cpsr.set_mode(OperatingMode::System);
+        self.cpsr.set_mode(OperatingMode::Supervisor);
         self.cpsr.set_t(false);
         self.cpsr.set_i(true);
         self.set_register(15, SWI_VEC);
     }
 
     fn undefined_interrupt(&mut self) {
-        self.und_register_bank[1] = self.get_register(15).wrapping_add(4);
+        self.und_register_bank[1] = self.get_register(15) & !0b1;
         self.und_spsr.raw = self.cpsr.raw;
         self.cpsr.set_mode(OperatingMode::Undefined);
         self.cpsr.set_t(false);
@@ -603,7 +727,12 @@ impl CPU {
     // Returns (shifted result, barrel shifter carry out)
     fn shifted_reg_operand(&self, operand: u32, allow_shift_by_reg: bool) -> (u32, bool) {
         let op2_reg_n = (operand & 0b1111) as usize;
-        let op2_reg = self.get_register(op2_reg_n) + if op2_reg_n == 15 { 8 } else { 0 };
+        let op2_reg = self.get_register(op2_reg_n)
+            + if op2_reg_n == 15 {
+                self.mode_instr_width()
+            } else {
+                0
+            };
 
         let shift_by_reg = (operand >> 4) & 1 == 1;
         let shift_amount = if allow_shift_by_reg && shift_by_reg {
@@ -690,6 +819,15 @@ impl CPU {
         (shifter_operand, shifter_carry)
     }
 
+    // Returns the bitwidth of a single instruction of either ARM or Thumb mode
+    fn mode_instr_width(&self) -> u32 {
+        if self.cpsr.get_t() {
+            2
+        } else {
+            4
+        }
+    }
+
     // Checks whether an add or subtract has resulted in overflow
     fn did_overflow(op1: u32, op2: u32, result: u32) -> bool {
         let op1_sign = (op1 >> 31) & 1 == 1;
@@ -704,17 +842,54 @@ impl CPU {
 // It would make sense if reading a 32-bit address that contained two registers read both
 // But reading a byte within a 16-bit register wouldn't happen physically (?)
 impl Memory for CPU {
-    // TODO: When do reads have side-effects?
-    // kevtris says open bus, link port reg's, RX errors, joybus RX
+    fn read_u16(&mut self, addr: usize) -> u16 {
+        if (0x04000000..=0x040003FE).contains(&addr) {
+            // TODO: read_u32 and read_u16 (same for write) should only capture particular
+            // registers, to allow for 32- and 16-bit registers
+            if addr == 0x04000006 {
+                (((self.cycles / 1232) % 228) as u16) & 0xFFFF
+            } else {
+                0 // TODO
+            }
+        } else {
+            let lo = self.read(addr) as u16;
+            let hi = self.read(addr + 1) as u16;
+            (hi << 8) | lo
+        }
+    }
+
     fn peek(&self, addr: usize) -> u8 {
         match addr {
             0x00000000..=0x00003FFF => self.bios_rom.peek(addr),
             0x02000000..=0x0203FFFF => self.ewram.peek(addr - 0x02000000),
             0x03000000..=0x0307FFFF => self.iwram.peek(addr - 0x03000000),
             0x04000000..=0x040003FE => {
-                0 // TODO
+                if addr == 0x04000006 {
+                    (((self.cycles / 1232) % 228) as u8) & 0xFF
+                } else {
+                    0 // TODO
+                }
+            }
+            0x05000000..=0x050003FF => self.palette_ram.peek(addr - 0x05000000),
+            0x06000000..=0x06017FFF => self.vram.peek(addr - 0x06000000),
+            0x08000000..=0x0DFFFFFF => {
+                // println!("Read gamepak!");
+                // 0
+                self.cart_rom.peek((addr - 0x08000000) % 0x400000)
             }
             _ => 0, // TODO: What to do here?
+        }
+    }
+
+    fn write_u16(&mut self, addr: usize, data: u16) {
+        if (0x04000000..=0x040003FE).contains(&addr) {
+            println!("write_u16 register {:8X}: data {:8X}", addr, data);
+            // TODO
+        } else {
+            let hi = (data >> 8) as u8;
+            let lo = (data & 0xff) as u8;
+            self.write(addr, lo);
+            self.write(addr + 1, hi);
         }
     }
 
@@ -722,9 +897,8 @@ impl Memory for CPU {
         match addr {
             0x02000000..=0x0203FFFF => self.ewram.write(addr - 0x02000000, data),
             0x03000000..=0x0307FFFF => self.iwram.write(addr - 0x03000000, data),
-            0x04000000..=0x040003FE => {
-                // TODO
-            }
+            0x05000000..=0x050003FF => self.palette_ram.write(addr - 0x05000000, data),
+            0x06000000..=0x06017FFF => self.vram.write(addr - 0x06000000, data),
             _ => {} // TODO: What to do here?
         }
     }

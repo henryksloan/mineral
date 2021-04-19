@@ -1,13 +1,13 @@
 use crate::Memory;
 
 pub struct RAM<const LENGTH: usize> {
-    memory: [u8; LENGTH],
+    memory: Vec<u8>,
 }
 
 impl<const LENGTH: usize> RAM<LENGTH> {
     pub fn new() -> Self {
         Self {
-            memory: [0; LENGTH],
+            memory: vec![0; LENGTH],
         }
     }
 }

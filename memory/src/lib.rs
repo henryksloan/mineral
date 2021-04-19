@@ -47,6 +47,6 @@ pub trait Memory {
         let hi = (data >> 16) as u16;
         let lo = (data & 0xffff) as u16;
         self.write_u16(addr, lo);
-        self.write_u16(addr + 1, hi);
+        self.write_u16(addr + 2, hi);
     }
 }
