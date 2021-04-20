@@ -47,6 +47,9 @@ pub struct CPU {
 
     cycles: u64, // TODO: Temporary
     log: bool,
+    pub start_button_press: bool, // TODO: Temporary
+    pub up_button_press: bool,    // TODO: Temporary
+    pub down_button_press: bool,  // TODO: Temporary
 }
 
 impl CPU {
@@ -75,6 +78,9 @@ impl CPU {
 
             cycles: 0,
             log: false,
+            start_button_press: false,
+            up_button_press: false,
+            down_button_press: false,
         }
     }
 
@@ -223,14 +229,14 @@ impl CPU {
 
     fn multiply_instr(&mut self, encoding: u32) {
         let long_flag = (encoding >> 23) & 1 == 1; // Output to two registers, allowing 64 bits
-        let unsigned_flag = (encoding >> 22) & 1 == 1; // Only used for long multiplies
+        let signed_flag = (encoding >> 22) & 1 == 1; // Only used for long multiplies
         let accumulate_flag = (encoding >> 21) & 1 == 1; // Allows a value to be added to the product
         let set_cond_flag = (encoding >> 20) & 1 == 1; // Updates zero and negative CPSR flags
 
         let op1 = self.get_register(((encoding >> 8) & 0b1111) as usize);
         let op2 = self.get_register((encoding & 0b1111) as usize);
-        let product = if long_flag && !unsigned_flag {
-            (op1 as i64 * op2 as i64) as u64
+        let product = if long_flag && signed_flag {
+            ((op1 as i32) as i64 * (op2 as i32) as i64) as u64
         } else {
             op1 as u64 * op2 as u64
         };
@@ -295,13 +301,14 @@ impl CPU {
         let load_flag = (encoding >> 20) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
-        let base_reg = self
-            .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 {
-                self.mode_instr_width()
-            } else {
-                0
-            });
+        let base_reg = {
+            let mut val = self.get_register(base_reg_n);
+            if base_reg_n == 15 {
+                val = val.wrapping_add(self.mode_instr_width());
+                val &= !0b11;
+            }
+            val
+        };
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if (encoding >> 22) & 1 == 1 {
@@ -333,7 +340,14 @@ impl CPU {
             };
             self.set_register(source_dest_reg_n, data);
         } else {
-            let data = self.get_register(source_dest_reg_n);
+            let data = {
+                let mut val = self.get_register(source_dest_reg_n);
+                if source_dest_reg_n == 15 {
+                    val = val.wrapping_add(self.mode_instr_width());
+                    val &= !0b11;
+                }
+                val
+            };
             match (encoding >> 5) & 0b11 {
                 0b01 => self.write_u16(transfer_addr, (data & 0xFFFF) as u16), // Unsigned halfword
                 0b10 | 0b11 => panic!("signed transfers used with store instructions"),
@@ -387,20 +401,30 @@ impl CPU {
         } as usize;
 
         // TODO: Handle endianness
-        // TODO: Handle special LDR behavior on non-word-aligned addresses
         if load_flag {
             let data = if byte_flag {
                 self.read(transfer_addr) as u32
             } else {
-                self.read_u32(transfer_addr)
+                let mut val = self.read_u32(transfer_addr & !0b11);
+                if transfer_addr & 0b11 != 0b00 {
+                    val = val.rotate_right(8 * (transfer_addr & 0b11) as u32);
+                }
+                val
             };
             self.set_register(source_dest_reg_n, data);
         } else {
+            let data = {
+                let mut val = self.get_register(source_dest_reg_n);
+                if source_dest_reg_n == 15 {
+                    val = val.wrapping_add(self.mode_instr_width());
+                    val &= !0b11;
+                }
+                val
+            };
             if byte_flag {
-                let data = (self.get_register(source_dest_reg_n) & 0xFF) as u8;
-                self.write(transfer_addr, data);
+                self.write(transfer_addr, (data & 0xFF) as u8);
             } else {
-                self.write_u32(transfer_addr, self.get_register(source_dest_reg_n));
+                self.write_u32(transfer_addr, data);
             }
         }
 
@@ -432,15 +456,14 @@ impl CPU {
         };
 
         let op1_reg_n = ((encoding >> 16) & 0b1111) as usize;
-        let op1_reg = self
-            .get_register(op1_reg_n)
-            .wrapping_add(if op1_reg_n == 15 {
-                // If the PC is used as an operand, prefetching causes it to be higher
-                // by an amount depending on whether the shift is specified directly or by a register
-                self.mode_instr_width() * if imm_flag { 1 } else { 2 }
-            } else {
-                0
-            });
+        let op1_reg = {
+            let mut val = self.get_register(op1_reg_n);
+            if op1_reg_n == 15 {
+                val = val.wrapping_add(self.mode_instr_width() * if imm_flag { 1 } else { 2 });
+                val &= !0b11;
+            }
+            val
+        };
 
         // http://vision.gel.ulaval.ca/~jflalonde/cours/1001/h17/docs/arm-instructionset.pdf pages 4-12 through 4-15
         // TODO: PC is supposed to produce lots of special cases
@@ -505,7 +528,7 @@ impl CPU {
                     .checked_add(carry)
                     .is_none();
         } else if opcode == 0b0110 {
-            shifter_carry = !op1_reg.checked_add(op2).is_none()
+            shifter_carry = !(op1_reg.checked_sub(op2).is_none()
                 || op1_reg
                     .checked_sub(op2)
                     .unwrap()
@@ -517,7 +540,7 @@ impl CPU {
                     .checked_add(carry)
                     .unwrap()
                     .checked_sub(1)
-                    .is_none();
+                    .is_none());
         } else if opcode == 0b0111 {
             shifter_carry = !op2.checked_add(op1_reg).is_none()
                 || op2
@@ -726,19 +749,28 @@ impl CPU {
     // Decodes a 12-bit operand to a register shifted by an immediate- or register-defined value
     // Returns (shifted result, barrel shifter carry out)
     fn shifted_reg_operand(&self, operand: u32, allow_shift_by_reg: bool) -> (u32, bool) {
-        let op2_reg_n = (operand & 0b1111) as usize;
-        let op2_reg = self.get_register(op2_reg_n)
-            + if op2_reg_n == 15 {
-                self.mode_instr_width()
-            } else {
-                0
-            };
-
         let shift_by_reg = (operand >> 4) & 1 == 1;
         let shift_amount = if allow_shift_by_reg && shift_by_reg {
             self.get_register(((operand >> 8) & 0b1111) as usize)
         } else {
             (operand >> 7) & 0b11111
+        };
+
+        let op2_reg_n = (operand & 0b1111) as usize;
+        let op2_reg = {
+            let mut val = self.get_register(op2_reg_n);
+            if op2_reg_n == 15 {
+                val = val.wrapping_add(
+                    self.mode_instr_width()
+                        * if !allow_shift_by_reg || !shift_by_reg {
+                            1
+                        } else {
+                            2
+                        },
+                );
+                val &= !0b11;
+            }
+            val
         };
 
         if shift_by_reg && shift_amount == 0 {
@@ -846,8 +878,19 @@ impl Memory for CPU {
         if (0x04000000..=0x040003FE).contains(&addr) {
             // TODO: read_u32 and read_u16 (same for write) should only capture particular
             // registers, to allow for 32- and 16-bit registers
+            // TODO: Be careful about what happens when reading a byte or halfword WITHIN a larger register
             if addr == 0x04000006 {
                 (((self.cycles / 1232) % 228) as u16) & 0xFFFF
+            } else if addr == 0x04000004 {
+                (160..=226).contains(&((self.cycles / 1232) % 228)) as u16
+            } else if addr == 0x04000130 {
+                let up = self.up_button_press;
+                self.up_button_press = false;
+                let down = self.down_button_press;
+                self.down_button_press = false;
+                let start = self.start_button_press;
+                self.start_button_press = false;
+                !((down as u16) << 7 | (up as u16) << 6 | (start as u16) << 3)
             } else {
                 0 // TODO
             }
