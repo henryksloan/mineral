@@ -358,7 +358,7 @@ impl CPU {
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if write_back_flag || !pre_index_flag {
+        if (write_back_flag || !pre_index_flag) && (source_dest_reg_n != base_reg_n) {
             self.set_register(base_reg_n, offset_addr);
         }
     }
@@ -431,7 +431,7 @@ impl CPU {
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if write_back_flag || !pre_index_flag {
+        if (write_back_flag || !pre_index_flag) && (source_dest_reg_n != base_reg_n) {
             self.set_register(base_reg_n, offset_addr);
         }
     }
@@ -675,7 +675,12 @@ impl CPU {
             transfer_addr += 4;
         }
 
-        if write_back_flag {
+        let base_reg_in_reg_list = (encoding >> base_reg_n) & 1 == 1;
+        if write_back_flag
+            && (!base_reg_in_reg_list
+                || reg_n_list.len() == 1
+                || reg_n_list.last() != Some(&base_reg_n))
+        {
             let offset_addr = if up_flag {
                 base_reg.wrapping_add(4 * reg_n_list.len() as u32)
             } else {

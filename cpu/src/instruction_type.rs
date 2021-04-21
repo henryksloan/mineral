@@ -35,9 +35,9 @@ impl InstructionType {
             Self::BranchExchange
         } else if (hi_8 | 0b100 == 0b00010100) && (lo_8 == 0b00001001) {
             Self::SingleSwap
-        } else if (hi_8 | 0b11011 == 0b00011011) && (lo_8 == 0b00001011) {
+        } else if (hi_8 | 0b11011 == 0b00011011) && (lo_8 | 0b110 == 0b00001111) {
             Self::HalfwordTransferReg
-        } else if (hi_8 | 0b11011 == 0b00011111) && (lo_4 == 0b1011) {
+        } else if (hi_8 | 0b11011 == 0b00011111) && (lo_4 | 0b110 == 0b1111) {
             Self::HalfwordTransferImm
         } else if hi_8 | 0b111111 == 0b00111111 {
             Self::DataProcessing
@@ -47,7 +47,7 @@ impl InstructionType {
             } else {
                 Self::SingleTransfer
             }
-        } else if hi_8 | 0b11011 == 0b10011011 {
+        } else if hi_8 | 0b11111 == 0b10011111 {
             Self::BlockTransfer
         } else if hi_8 | 0b11111 == 0b10111111 {
             Self::Branch
@@ -180,7 +180,7 @@ impl InstructionType {
             // Load/store word/byte immediate offset
             let byte = (encoding >> 12) & 1;
             let load = (encoding >> 11) & 1;
-            let offset = (encoding >> 6) & 0b11111;
+            let offset = ((encoding >> 6) & 0b11111) << 2;
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
             (0b111001011000 << 20) | (load << 20) | (byte << 22) | (rn << 16) | (rd << 12) | offset
