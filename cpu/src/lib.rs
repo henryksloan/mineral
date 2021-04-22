@@ -174,7 +174,7 @@ impl CPU {
             Condition::GE => self.cpsr.get_n() == self.cpsr.get_v(),
             Condition::LT => self.cpsr.get_n() != self.cpsr.get_v(),
             Condition::GT => !self.cpsr.get_z() && (self.cpsr.get_n() == self.cpsr.get_v()),
-            Condition::LE => self.cpsr.get_z() && (self.cpsr.get_n() != self.cpsr.get_v()),
+            Condition::LE => self.cpsr.get_z() || (self.cpsr.get_n() != self.cpsr.get_v()),
             Condition::AL => true,
             Condition::NV => false,
         }
@@ -473,30 +473,31 @@ impl CPU {
             self.shifted_reg_operand(encoding & 0xFFF, true)
         };
 
+        let result_overflowed =
+            |result: u32, op2_val: u32| Some(Self::did_overflow(op1_reg, op2_val, result));
         let check_overflow = |result: u32, write_result: bool| {
-            (
-                result,
-                Some(Self::did_overflow(op1_reg, op2, result)),
-                write_result,
-            )
+            (result, result_overflowed(result, op2), write_result)
+        };
+        let check_overflow_sub = |result: u32, write_result: bool| {
+            (result, result_overflowed(result, !op2 + 1), write_result)
         };
 
         let carry = self.cpsr.get_c() as u32;
         let (result, overflow, write_result) = match opcode {
             0b0000 => (op1_reg & op2, None, true), // AND
             0b0001 => (op1_reg ^ op2, None, true), // EOR
-            0b0010 => check_overflow(op1_reg.wrapping_sub(op2), true), // SUB
-            0b0011 => check_overflow(op2.wrapping_sub(op1_reg), true), // RSB
+            0b0010 => check_overflow_sub(op1_reg.wrapping_sub(op2), true), // SUB
+            0b0011 => check_overflow_sub(op2.wrapping_sub(op1_reg), true), // RSB
             0b0100 => check_overflow(op1_reg.wrapping_add(op2), true), // ADD
             0b0101 => check_overflow(op1_reg.wrapping_add(op2).wrapping_add(carry), true), // ADC
-            0b0110 => check_overflow(
+            0b0110 => check_overflow_sub(
                 op1_reg
                     .wrapping_sub(op2)
                     .wrapping_add(carry)
                     .wrapping_sub(1),
                 true,
             ), // SBC
-            0b0111 => check_overflow(
+            0b0111 => check_overflow_sub(
                 op2.wrapping_sub(op1_reg)
                     .wrapping_add(carry)
                     .wrapping_sub(1),
@@ -504,7 +505,7 @@ impl CPU {
             ), // RSC
             0b1000 => (op1_reg & op2, None, false), // TST
             0b1001 => (op1_reg ^ op2, None, false), // TEQ
-            0b1010 => check_overflow(op1_reg.wrapping_sub(op2), false), // CMP
+            0b1010 => check_overflow_sub(op1_reg.wrapping_sub(op2), false), // CMP
             0b1011 => check_overflow(op1_reg.wrapping_add(op2), false), // CMN
             0b1100 => (op1_reg | op2, None, true), // OOR
             0b1101 => (op2, None, true),           // MOV
@@ -756,7 +757,7 @@ impl CPU {
     fn shifted_reg_operand(&self, operand: u32, allow_shift_by_reg: bool) -> (u32, bool) {
         let shift_by_reg = (operand >> 4) & 1 == 1;
         let shift_amount = if allow_shift_by_reg && shift_by_reg {
-            self.get_register(((operand >> 8) & 0b1111) as usize)
+            self.get_register(((operand >> 8) & 0b1111) as usize) & 0xFF
         } else {
             (operand >> 7) & 0b11111
         };
