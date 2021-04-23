@@ -1,6 +1,8 @@
+pub mod mmu;
 pub mod ram;
 pub mod rom;
 
+pub use self::mmu::MMU;
 pub use self::ram::RAM;
 pub use self::rom::ROM;
 
