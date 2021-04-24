@@ -6,3 +6,4 @@ edition = "2018"
 
 [dependencies]
 memory = { path = "../memory" }
+bitfield = "0.13.2"

@@ -38,22 +38,17 @@ pub struct CPU {
     irq_register_bank: [u32; 2],
     und_register_bank: [u32; 2],
 
-    pub bios_rom: ROM<0x4000>,
-    ewram: RAM<0x40000>,         // Internal work RAM
-    iwram: RAM<0x8000>,          // External work RAM
-    pub vram: RAM<0x18000>,      // VRAM, TODO: This should be in a separate struct
-    pub palette_ram: RAM<0x400>, // Palette RAM, TODO: This should be in a separate struct
-    pub cart_rom: ROM<0x400000>, // Cartridge ROM, TODO: This shouldn't be here
+    memory: Box<dyn Memory>,
+    bios_rom: Vec<u8>, // Bios ROM
+    ewram: Vec<u8>,    // External work RAM
+    iwram: Vec<u8>,    // Internal work RAM
+    cart_rom: Vec<u8>, // Cartridge ROM
 
-    cycles: u64, // TODO: Temporary
     log: bool,
-    pub start_button_press: bool, // TODO: Temporary
-    pub up_button_press: bool,    // TODO: Temporary
-    pub down_button_press: bool,  // TODO: Temporary
 }
 
 impl CPU {
-    pub fn new() -> Self {
+    pub fn new(memory: Box<dyn Memory>) -> Self {
         Self {
             cpsr: StatusRegister::new(),
             fiq_spsr: StatusRegister::new(),
@@ -69,18 +64,13 @@ impl CPU {
             irq_register_bank: [0; 2],
             und_register_bank: [0; 2],
 
-            bios_rom: ROM::new(),
-            ewram: RAM::new(),
-            iwram: RAM::new(),
-            vram: RAM::new(),
-            palette_ram: RAM::new(),
-            cart_rom: ROM::new(),
+            memory,
+            bios_rom: vec![0; 0x4000],
+            ewram: vec![0; 0x40000],
+            iwram: vec![0; 0x8000],
+            cart_rom: vec![0; 0x400000],
 
-            cycles: 0,
             log: false,
-            start_button_press: false,
-            up_button_press: false,
-            down_button_press: false,
         }
     }
 
@@ -155,8 +145,16 @@ impl CPU {
                 InstructionType::ThumbBranchSuffix => self.thumb_branch_suffix(encoding as u16),
             }
         }
+    }
 
-        self.cycles += 1;
+    pub fn flash_bios(&mut self, data: Vec<u8>) {
+        self.bios_rom = vec![0; 0x4000];
+        self.bios_rom[..data.len()].clone_from_slice(&data);
+    }
+
+    pub fn flash_cart(&mut self, data: Vec<u8>) {
+        self.cart_rom = vec![0; 0x400000];
+        self.cart_rom[..data.len()].clone_from_slice(&data);
     }
 
     fn eval_condition(&self, condition: Condition) -> bool {
@@ -479,7 +477,11 @@ impl CPU {
             (result, result_overflowed(result, op2), write_result)
         };
         let check_overflow_sub = |result: u32, write_result: bool| {
-            (result, result_overflowed(result, !op2 + 1), write_result)
+            (
+                result,
+                result_overflowed(result, (!op2).wrapping_add(1)),
+                write_result,
+            )
         };
 
         let carry = self.cpsr.get_c() as u32;
@@ -834,8 +836,8 @@ impl CPU {
                                 (op2_reg & 1) == 1,
                             )
                         } else {
-                            let shifter_carry = (op2_reg >> (shift_amount - 1)) & 1 == 1;
-                            (op2_reg.rotate_right(shift_amount), shifter_carry)
+                            let shifter_carry = (op2_reg >> (new_shift_amount - 1)) & 1 == 1;
+                            (op2_reg.rotate_right(new_shift_amount), shifter_carry)
                         }
                     }
                 }
@@ -875,80 +877,23 @@ impl CPU {
     }
 }
 
-// TODO: Most memory-mapped registers seem to be 16- or 32-bit
-// Should they only be readable through reads of exactly that width?
-// It would make sense if reading a 32-bit address that contained two registers read both
-// But reading a byte within a 16-bit register wouldn't happen physically (?)
 impl Memory for CPU {
-    fn read_u16(&mut self, addr: usize) -> u16 {
-        if (0x04000000..=0x040003FE).contains(&addr) {
-            // TODO: read_u32 and read_u16 (same for write) should only capture particular
-            // registers, to allow for 32- and 16-bit registers
-            // TODO: Be careful about what happens when reading a byte or halfword WITHIN a larger register
-            if addr == 0x04000006 {
-                (((self.cycles / 1232) % 228) as u16) & 0xFFFF
-            } else if addr == 0x04000004 {
-                (160..=226).contains(&((self.cycles / 1232) % 228)) as u16
-            } else if addr == 0x04000130 {
-                let up = self.up_button_press;
-                self.up_button_press = false;
-                let down = self.down_button_press;
-                self.down_button_press = false;
-                let start = self.start_button_press;
-                self.start_button_press = false;
-                !((down as u16) << 7 | (up as u16) << 6 | (start as u16) << 3)
-            } else {
-                0 // TODO
-            }
-        } else {
-            let lo = self.read(addr) as u16;
-            let hi = self.read(addr + 1) as u16;
-            (hi << 8) | lo
-        }
-    }
-
     fn peek(&self, addr: usize) -> u8 {
         match addr {
-            0x00000000..=0x00003FFF => self.bios_rom.peek(addr),
-            0x02000000..=0x0203FFFF => self.ewram.peek(addr - 0x02000000),
-            0x03000000..=0x0307FFFF => self.iwram.peek(addr - 0x03000000),
-            0x04000000..=0x040003FE => {
-                if addr == 0x04000006 {
-                    (((self.cycles / 1232) % 228) as u8) & 0xFF
-                } else {
-                    0 // TODO
-                }
-            }
-            0x05000000..=0x050003FF => self.palette_ram.peek(addr - 0x05000000),
-            0x06000000..=0x06017FFF => self.vram.peek(addr - 0x06000000),
-            0x08000000..=0x0DFFFFFF => {
-                // println!("Read gamepak!");
-                // 0
-                self.cart_rom.peek((addr - 0x08000000) % 0x400000)
-            }
-            _ => 0, // TODO: What to do here?
-        }
-    }
-
-    fn write_u16(&mut self, addr: usize, data: u16) {
-        if (0x04000000..=0x040003FE).contains(&addr) {
-            println!("write_u16 register {:8X}: data {:8X}", addr, data);
-            // TODO
-        } else {
-            let hi = (data >> 8) as u8;
-            let lo = (data & 0xff) as u8;
-            self.write(addr, lo);
-            self.write(addr + 1, hi);
+            0x00000000..=0x00003FFF => self.bios_rom[addr],
+            0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000],
+            0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
+            0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000],
+            _ => self.memory.peek(addr),
         }
     }
 
     fn write(&mut self, addr: usize, data: u8) {
         match addr {
-            0x02000000..=0x0203FFFF => self.ewram.write(addr - 0x02000000, data),
-            0x03000000..=0x0307FFFF => self.iwram.write(addr - 0x03000000, data),
-            0x05000000..=0x050003FF => self.palette_ram.write(addr - 0x05000000, data),
-            0x06000000..=0x06017FFF => self.vram.write(addr - 0x06000000, data),
-            _ => {} // TODO: What to do here?
+            0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000] = data,
+            0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000] = data,
+            0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000] = data,
+            _ => self.memory.write(addr, data),
         }
     }
 }
