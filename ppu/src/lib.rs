@@ -140,8 +140,8 @@ impl PPU {
             1 => {}
             2 => {}
             3 => {
-                let y = self.scan_line as usize / 8;
-                let mut pixel_i = 2 * y;
+                let y = self.scan_line as usize;
+                let mut pixel_i = 480 * y;
                 for x in 0..240 {
                     let color = self.vram.borrow_mut().read_u16(2 * (x + 240 * y));
                     self.framebuffer[pixel_i + 0] = color as u8;
@@ -152,8 +152,13 @@ impl PPU {
             4 => {
                 let y = self.scan_line as usize;
                 let mut pixel_i = 480 * y;
+                let page_base = if self.lcd_control_reg.frame_select() {
+                    0x9600
+                } else {
+                    0
+                };
                 for x in 0..240 {
-                    let color_i = self.vram.borrow_mut().read(x + 240 * y);
+                    let color_i = self.vram.borrow_mut().read(page_base + x + 240 * y);
                     let color = self
                         .palette_ram
                         .borrow_mut()
