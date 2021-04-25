@@ -182,6 +182,7 @@ impl PPU {
             0b10 => (32, 64),
             0b11 | _ => (64, 64),
         };
+        let full_palette_mode = self.bg_control_regs[bg_n].colors();
 
         let offset_x = (self.scroll_regs[bg_n].0.offset() as usize) % (n_bg_cols * 8);
         let offset_y = (self.scroll_regs[bg_n].1.offset() as usize) % (n_bg_rows * 8);
@@ -213,32 +214,50 @@ impl PPU {
             let flip_h = (map_entry >> 10) & 1 == 1;
             let flip_v = (map_entry >> 11) & 1 == 1;
             let palette_n = (map_entry >> 12) & 0b1111;
-            for byte_n in 0..4 {
-                let pixel_x_offset = ((tile_col - first_tile_col) * 8 + 2 * byte_n) as isize
-                    - (offset_x as isize) % 8;
-                let data = self.vram.borrow_mut().read(
-                    0x4000 * self.bg_control_regs[bg_n].char_block() as usize
-                        + 32 * tile_n as usize
-                        + (if flip_v { 7 - row } else { row }) * 4
-                        + (if flip_h { 3 - byte_n } else { byte_n }),
-                );
-                let color_i_left = data & 0b1111;
-                let color_left = self
-                    .palette_ram
-                    .borrow_mut()
-                    .read_u16(2 * (palette_n as usize * 16 + color_i_left as usize));
-                let color_i_right = (data >> 4) & 0b1111;
-                let color_right = self
-                    .palette_ram
-                    .borrow_mut()
-                    .read_u16(2 * (palette_n as usize * 16 + color_i_right as usize));
-                if pixel_x_offset >= 0 && pixel_x_offset <= 239 {
-                    out[2 * (pixel_x_offset as usize) + 0] = color_left as u8;
-                    out[2 * (pixel_x_offset as usize) + 1] = (color_left >> 8) as u8;
+            if full_palette_mode {
+                for byte_n in 0..8 {
+                    let pixel_x_offset = ((tile_col - first_tile_col) * 8 + byte_n) as isize
+                        - (offset_x as isize) % 8;
+                    let data = self.vram.borrow_mut().read(
+                        0x4000 * self.bg_control_regs[bg_n].char_block() as usize
+                            + 64 * tile_n as usize
+                            + (if flip_v { 7 - row } else { row }) * 8
+                            + (if flip_h { 3 - byte_n } else { byte_n }) * 2,
+                    );
+                    let color = self.palette_ram.borrow_mut().read_u16(data as usize);
+                    if pixel_x_offset >= 0 && pixel_x_offset <= 239 {
+                        out[2 * (pixel_x_offset as usize) + 0] = color as u8;
+                        out[2 * (pixel_x_offset as usize) + 1] = (color >> 8) as u8;
+                    }
                 }
-                if pixel_x_offset >= -1 && (pixel_x_offset + 1) <= 239 {
-                    out[(2 * pixel_x_offset + 2) as usize] = color_right as u8;
-                    out[(2 * pixel_x_offset + 3) as usize] = (color_right >> 8) as u8;
+            } else {
+                for byte_n in 0..4 {
+                    let pixel_x_offset = ((tile_col - first_tile_col) * 8 + 2 * byte_n) as isize
+                        - (offset_x as isize) % 8;
+                    let data = self.vram.borrow_mut().read(
+                        0x4000 * self.bg_control_regs[bg_n].char_block() as usize
+                            + 32 * tile_n as usize
+                            + (if flip_v { 7 - row } else { row }) * 4
+                            + (if flip_h { 3 - byte_n } else { byte_n }),
+                    );
+                    let color_i_left = data & 0b1111;
+                    let color_left = self
+                        .palette_ram
+                        .borrow_mut()
+                        .read_u16(2 * (palette_n as usize * 16 + color_i_left as usize));
+                    let color_i_right = (data >> 4) & 0b1111;
+                    let color_right = self
+                        .palette_ram
+                        .borrow_mut()
+                        .read_u16(2 * (palette_n as usize * 16 + color_i_right as usize));
+                    if pixel_x_offset >= 0 && pixel_x_offset <= 239 {
+                        out[2 * (pixel_x_offset as usize) + 0] = color_left as u8;
+                        out[2 * (pixel_x_offset as usize) + 1] = (color_left >> 8) as u8;
+                    }
+                    if pixel_x_offset >= -1 && (pixel_x_offset + 1) <= 239 {
+                        out[(2 * pixel_x_offset + 2) as usize] = color_right as u8;
+                        out[(2 * pixel_x_offset + 3) as usize] = (color_right >> 8) as u8;
+                    }
                 }
             }
         }
