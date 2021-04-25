@@ -1,3 +1,7 @@
+mod key_controller;
+
+use crate::key_controller::KeyController;
+
 use cpu::CPU;
 use memory::{Memory, RAM};
 use ppu::PPU;
@@ -8,6 +12,8 @@ use std::rc::Rc;
 pub struct GBA {
     cpu: Rc<RefCell<CPU>>,
     ppu: Rc<RefCell<PPU>>,
+
+    key_controller: Rc<RefCell<KeyController>>,
 }
 
 impl GBA {
@@ -22,11 +28,14 @@ impl GBA {
             oam.clone(),
         )));
 
+        let key_controller = Rc::new(RefCell::new(KeyController::new()));
+
         let mmu = Box::new(MemoryMap {
             vram: vram.clone(),
             palette_ram: palette_ram.clone(),
             oam: oam.clone(),
             ppu: ppu.clone(),
+            key_controller: key_controller.clone(),
         });
 
         // TODO: Initialize the DMA controller with the MMU Rc
@@ -35,7 +44,11 @@ impl GBA {
 
         // TODO: Initialize interrupt controller
 
-        Self { cpu, ppu }
+        Self {
+            cpu,
+            ppu,
+            key_controller,
+        }
     }
 
     pub fn tick(&mut self) {
@@ -67,6 +80,10 @@ impl GBA {
     pub fn flash_cart(&mut self, data: Vec<u8>) {
         self.cpu.borrow_mut().flash_cart(data);
     }
+
+    pub fn update_key_state(&mut self, state: u16) {
+        self.key_controller.borrow_mut().set_state(state);
+    }
 }
 
 struct MemoryMap {
@@ -75,6 +92,7 @@ struct MemoryMap {
     oam: Rc<RefCell<RAM<0x400>>>,         // Object attribute memory
 
     ppu: Rc<RefCell<PPU>>,
+    key_controller: Rc<RefCell<KeyController>>,
 }
 
 impl Memory for MemoryMap {
@@ -85,7 +103,8 @@ impl Memory for MemoryMap {
             0x07000000..=0x070003FF => self.oam.borrow().peek(addr - 0x07000000),
 
             // IO map
-            0x04000000..=0x040003FE => self.ppu.borrow().peek(addr - 0x04000000),
+            0x04000000..=0x04000057 => self.ppu.borrow().peek(addr - 0x04000000),
+            0x04000130..=0x04000133 => self.key_controller.borrow().peek(addr - 0x04000000),
             _ => 0,
         }
     }
@@ -97,7 +116,11 @@ impl Memory for MemoryMap {
             0x07000000..=0x070003FF => self.oam.borrow_mut().write(addr - 0x07000000, data),
 
             // IO map
-            0x04000000..=0x040003FE => self.ppu.borrow_mut().write(addr - 0x04000000, data),
+            0x04000000..=0x04000057 => self.ppu.borrow_mut().write(addr - 0x04000000, data),
+            0x04000130..=0x04000133 => self
+                .key_controller
+                .borrow_mut()
+                .write(addr - 0x04000000, data),
             _ => {}
         }
     }

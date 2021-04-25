@@ -140,7 +140,11 @@ impl InstructionType {
                 0b1110 => (0b0001, 0b1101, rd_rn, rd_rn, 0, 0, rm_rs), // BIC
                 0b1111 | _ => (0b0001, 0b1111, 0, rd_rn, 0, 0, rm_rs), // MVN
             };
-            instr_type = Some(InstructionType::DataProcessing);
+            instr_type = if op == 0b1101 {
+                Some(InstructionType::Multiply)
+            } else {
+                Some(InstructionType::DataProcessing)
+            };
             (0b1110 << 28) | (a << 24) | (b << 20) | (c << 16) | (d << 12) | (e << 8) | (f << 4) | g
         } else if hi_n(6) == 0b010001 && (encoding >> 8) & 0b11 != 0b11 {
             // Special data processing
