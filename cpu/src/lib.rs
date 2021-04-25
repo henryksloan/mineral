@@ -38,19 +38,17 @@ pub struct CPU {
     irq_register_bank: [u32; 2],
     und_register_bank: [u32; 2],
 
-    pub bios_rom: ROM<0x4000>,
-    ewram: RAM<0x40000>,         // Internal work RAM
-    iwram: RAM<0x8000>,          // External work RAM
-    pub vram: RAM<0x18000>,      // VRAM, TODO: This should be in a separate struct
-    pub palette_ram: RAM<0x400>, // Palette RAM, TODO: This should be in a separate struct
-    pub cart_rom: ROM<0x400000>, // Cartridge ROM, TODO: This shouldn't be here
+    memory: Box<dyn Memory>,
+    bios_rom: Vec<u8>, // Bios ROM
+    ewram: Vec<u8>,    // External work RAM
+    iwram: Vec<u8>,    // Internal work RAM
+    cart_rom: Vec<u8>, // Cartridge ROM
 
-    cycles: u64, // TODO: Temporary
     log: bool,
 }
 
 impl CPU {
-    pub fn new() -> Self {
+    pub fn new(memory: Box<dyn Memory>) -> Self {
         Self {
             cpsr: StatusRegister::new(),
             fiq_spsr: StatusRegister::new(),
@@ -66,14 +64,12 @@ impl CPU {
             irq_register_bank: [0; 2],
             und_register_bank: [0; 2],
 
-            bios_rom: ROM::new(),
-            ewram: RAM::new(),
-            iwram: RAM::new(),
-            vram: RAM::new(),
-            palette_ram: RAM::new(),
-            cart_rom: ROM::new(),
+            memory,
+            bios_rom: vec![0; 0x4000],
+            ewram: vec![0; 0x40000],
+            iwram: vec![0; 0x8000],
+            cart_rom: vec![0; 0x400000],
 
-            cycles: 0,
             log: false,
         }
     }
@@ -149,8 +145,16 @@ impl CPU {
                 InstructionType::ThumbBranchSuffix => self.thumb_branch_suffix(encoding as u16),
             }
         }
+    }
 
-        self.cycles += 1;
+    pub fn flash_bios(&mut self, data: Vec<u8>) {
+        self.bios_rom = vec![0; 0x4000];
+        self.bios_rom[..data.len()].clone_from_slice(&data);
+    }
+
+    pub fn flash_cart(&mut self, data: Vec<u8>) {
+        self.cart_rom = vec![0; 0x400000];
+        self.cart_rom[..data.len()].clone_from_slice(&data);
     }
 
     fn eval_condition(&self, condition: Condition) -> bool {
@@ -168,7 +172,7 @@ impl CPU {
             Condition::GE => self.cpsr.get_n() == self.cpsr.get_v(),
             Condition::LT => self.cpsr.get_n() != self.cpsr.get_v(),
             Condition::GT => !self.cpsr.get_z() && (self.cpsr.get_n() == self.cpsr.get_v()),
-            Condition::LE => self.cpsr.get_z() && (self.cpsr.get_n() != self.cpsr.get_v()),
+            Condition::LE => self.cpsr.get_z() || (self.cpsr.get_n() != self.cpsr.get_v()),
             Condition::AL => true,
             Condition::NV => false,
         }
@@ -223,14 +227,14 @@ impl CPU {
 
     fn multiply_instr(&mut self, encoding: u32) {
         let long_flag = (encoding >> 23) & 1 == 1; // Output to two registers, allowing 64 bits
-        let unsigned_flag = (encoding >> 22) & 1 == 1; // Only used for long multiplies
+        let signed_flag = (encoding >> 22) & 1 == 1; // Only used for long multiplies
         let accumulate_flag = (encoding >> 21) & 1 == 1; // Allows a value to be added to the product
         let set_cond_flag = (encoding >> 20) & 1 == 1; // Updates zero and negative CPSR flags
 
         let op1 = self.get_register(((encoding >> 8) & 0b1111) as usize);
         let op2 = self.get_register((encoding & 0b1111) as usize);
-        let product = if long_flag && !unsigned_flag {
-            (op1 as i64 * op2 as i64) as u64
+        let product = if long_flag && signed_flag {
+            ((op1 as i32) as i64 * (op2 as i32) as i64) as u64
         } else {
             op1 as u64 * op2 as u64
         };
@@ -295,13 +299,14 @@ impl CPU {
         let load_flag = (encoding >> 20) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
-        let base_reg = self
-            .get_register(base_reg_n)
-            .wrapping_add(if base_reg_n == 15 {
-                self.mode_instr_width()
-            } else {
-                0
-            });
+        let base_reg = {
+            let mut val = self.get_register(base_reg_n);
+            if base_reg_n == 15 {
+                val = val.wrapping_add(self.mode_instr_width());
+                val &= !0b11;
+            }
+            val
+        };
         let source_dest_reg_n = ((encoding >> 12) & 0b1111) as usize;
 
         let offset = if (encoding >> 22) & 1 == 1 {
@@ -333,7 +338,14 @@ impl CPU {
             };
             self.set_register(source_dest_reg_n, data);
         } else {
-            let data = self.get_register(source_dest_reg_n);
+            let data = {
+                let mut val = self.get_register(source_dest_reg_n);
+                if source_dest_reg_n == 15 {
+                    val = val.wrapping_add(self.mode_instr_width());
+                    val &= !0b11;
+                }
+                val
+            };
             match (encoding >> 5) & 0b11 {
                 0b01 => self.write_u16(transfer_addr, (data & 0xFFFF) as u16), // Unsigned halfword
                 0b10 | 0b11 => panic!("signed transfers used with store instructions"),
@@ -344,7 +356,7 @@ impl CPU {
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if write_back_flag || !pre_index_flag {
+        if (write_back_flag || !pre_index_flag) && (source_dest_reg_n != base_reg_n) {
             self.set_register(base_reg_n, offset_addr);
         }
     }
@@ -387,27 +399,37 @@ impl CPU {
         } as usize;
 
         // TODO: Handle endianness
-        // TODO: Handle special LDR behavior on non-word-aligned addresses
         if load_flag {
             let data = if byte_flag {
                 self.read(transfer_addr) as u32
             } else {
-                self.read_u32(transfer_addr)
+                let mut val = self.read_u32(transfer_addr & !0b11);
+                if transfer_addr & 0b11 != 0b00 {
+                    val = val.rotate_right(8 * (transfer_addr & 0b11) as u32);
+                }
+                val
             };
             self.set_register(source_dest_reg_n, data);
         } else {
+            let data = {
+                let mut val = self.get_register(source_dest_reg_n);
+                if source_dest_reg_n == 15 {
+                    val = val.wrapping_add(self.mode_instr_width());
+                    val &= !0b11;
+                }
+                val
+            };
             if byte_flag {
-                let data = (self.get_register(source_dest_reg_n) & 0xFF) as u8;
-                self.write(transfer_addr, data);
+                self.write(transfer_addr, (data & 0xFF) as u8);
             } else {
-                self.write_u32(transfer_addr, self.get_register(source_dest_reg_n));
+                self.write_u32(transfer_addr, data);
             }
         }
 
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if write_back_flag || !pre_index_flag {
+        if (write_back_flag || !pre_index_flag) && (source_dest_reg_n != base_reg_n) {
             self.set_register(base_reg_n, offset_addr);
         }
     }
@@ -432,15 +454,14 @@ impl CPU {
         };
 
         let op1_reg_n = ((encoding >> 16) & 0b1111) as usize;
-        let op1_reg = self
-            .get_register(op1_reg_n)
-            .wrapping_add(if op1_reg_n == 15 {
-                // If the PC is used as an operand, prefetching causes it to be higher
-                // by an amount depending on whether the shift is specified directly or by a register
-                self.mode_instr_width() * if imm_flag { 1 } else { 2 }
-            } else {
-                0
-            });
+        let op1_reg = {
+            let mut val = self.get_register(op1_reg_n);
+            if op1_reg_n == 15 {
+                val = val.wrapping_add(self.mode_instr_width() * if imm_flag { 1 } else { 2 });
+                val &= !0b11;
+            }
+            val
+        };
 
         // http://vision.gel.ulaval.ca/~jflalonde/cours/1001/h17/docs/arm-instructionset.pdf pages 4-12 through 4-15
         // TODO: PC is supposed to produce lots of special cases
@@ -450,10 +471,15 @@ impl CPU {
             self.shifted_reg_operand(encoding & 0xFFF, true)
         };
 
+        let result_overflowed =
+            |result: u32, op2_val: u32| Some(Self::did_overflow(op1_reg, op2_val, result));
         let check_overflow = |result: u32, write_result: bool| {
+            (result, result_overflowed(result, op2), write_result)
+        };
+        let check_overflow_sub = |result: u32, write_result: bool| {
             (
                 result,
-                Some(Self::did_overflow(op1_reg, op2, result)),
+                result_overflowed(result, (!op2).wrapping_add(1)),
                 write_result,
             )
         };
@@ -462,18 +488,18 @@ impl CPU {
         let (result, overflow, write_result) = match opcode {
             0b0000 => (op1_reg & op2, None, true), // AND
             0b0001 => (op1_reg ^ op2, None, true), // EOR
-            0b0010 => check_overflow(op1_reg.wrapping_sub(op2), true), // SUB
-            0b0011 => check_overflow(op2.wrapping_sub(op1_reg), true), // RSB
+            0b0010 => check_overflow_sub(op1_reg.wrapping_sub(op2), true), // SUB
+            0b0011 => check_overflow_sub(op2.wrapping_sub(op1_reg), true), // RSB
             0b0100 => check_overflow(op1_reg.wrapping_add(op2), true), // ADD
             0b0101 => check_overflow(op1_reg.wrapping_add(op2).wrapping_add(carry), true), // ADC
-            0b0110 => check_overflow(
+            0b0110 => check_overflow_sub(
                 op1_reg
                     .wrapping_sub(op2)
                     .wrapping_add(carry)
                     .wrapping_sub(1),
                 true,
             ), // SBC
-            0b0111 => check_overflow(
+            0b0111 => check_overflow_sub(
                 op2.wrapping_sub(op1_reg)
                     .wrapping_add(carry)
                     .wrapping_sub(1),
@@ -481,7 +507,7 @@ impl CPU {
             ), // RSC
             0b1000 => (op1_reg & op2, None, false), // TST
             0b1001 => (op1_reg ^ op2, None, false), // TEQ
-            0b1010 => check_overflow(op1_reg.wrapping_sub(op2), false), // CMP
+            0b1010 => check_overflow_sub(op1_reg.wrapping_sub(op2), false), // CMP
             0b1011 => check_overflow(op1_reg.wrapping_add(op2), false), // CMN
             0b1100 => (op1_reg | op2, None, true), // OOR
             0b1101 => (op2, None, true),           // MOV
@@ -505,7 +531,7 @@ impl CPU {
                     .checked_add(carry)
                     .is_none();
         } else if opcode == 0b0110 {
-            shifter_carry = !op1_reg.checked_add(op2).is_none()
+            shifter_carry = !(op1_reg.checked_sub(op2).is_none()
                 || op1_reg
                     .checked_sub(op2)
                     .unwrap()
@@ -517,7 +543,7 @@ impl CPU {
                     .checked_add(carry)
                     .unwrap()
                     .checked_sub(1)
-                    .is_none();
+                    .is_none());
         } else if opcode == 0b0111 {
             shifter_carry = !op2.checked_add(op1_reg).is_none()
                 || op2
@@ -652,7 +678,12 @@ impl CPU {
             transfer_addr += 4;
         }
 
-        if write_back_flag {
+        let base_reg_in_reg_list = (encoding >> base_reg_n) & 1 == 1;
+        if write_back_flag
+            && (!base_reg_in_reg_list
+                || reg_n_list.len() == 1
+                || reg_n_list.last() != Some(&base_reg_n))
+        {
             let offset_addr = if up_flag {
                 base_reg.wrapping_add(4 * reg_n_list.len() as u32)
             } else {
@@ -726,19 +757,28 @@ impl CPU {
     // Decodes a 12-bit operand to a register shifted by an immediate- or register-defined value
     // Returns (shifted result, barrel shifter carry out)
     fn shifted_reg_operand(&self, operand: u32, allow_shift_by_reg: bool) -> (u32, bool) {
-        let op2_reg_n = (operand & 0b1111) as usize;
-        let op2_reg = self.get_register(op2_reg_n)
-            + if op2_reg_n == 15 {
-                self.mode_instr_width()
-            } else {
-                0
-            };
-
         let shift_by_reg = (operand >> 4) & 1 == 1;
         let shift_amount = if allow_shift_by_reg && shift_by_reg {
-            self.get_register(((operand >> 8) & 0b1111) as usize)
+            self.get_register(((operand >> 8) & 0b1111) as usize) & 0xFF
         } else {
             (operand >> 7) & 0b11111
+        };
+
+        let op2_reg_n = (operand & 0b1111) as usize;
+        let op2_reg = {
+            let mut val = self.get_register(op2_reg_n);
+            if op2_reg_n == 15 {
+                val = val.wrapping_add(
+                    self.mode_instr_width()
+                        * if !allow_shift_by_reg || !shift_by_reg {
+                            1
+                        } else {
+                            2
+                        },
+                );
+                val &= !0b11;
+            }
+            val
         };
 
         if shift_by_reg && shift_amount == 0 {
@@ -796,8 +836,8 @@ impl CPU {
                                 (op2_reg & 1) == 1,
                             )
                         } else {
-                            let shifter_carry = (op2_reg >> (shift_amount - 1)) & 1 == 1;
-                            (op2_reg.rotate_right(shift_amount), shifter_carry)
+                            let shifter_carry = (op2_reg >> (new_shift_amount - 1)) & 1 == 1;
+                            (op2_reg.rotate_right(new_shift_amount), shifter_carry)
                         }
                     }
                 }
@@ -837,69 +877,23 @@ impl CPU {
     }
 }
 
-// TODO: Most memory-mapped registers seem to be 16- or 32-bit
-// Should they only be readable through reads of exactly that width?
-// It would make sense if reading a 32-bit address that contained two registers read both
-// But reading a byte within a 16-bit register wouldn't happen physically (?)
 impl Memory for CPU {
-    fn read_u16(&mut self, addr: usize) -> u16 {
-        if (0x04000000..=0x040003FE).contains(&addr) {
-            // TODO: read_u32 and read_u16 (same for write) should only capture particular
-            // registers, to allow for 32- and 16-bit registers
-            if addr == 0x04000006 {
-                (((self.cycles / 1232) % 228) as u16) & 0xFFFF
-            } else {
-                0 // TODO
-            }
-        } else {
-            let lo = self.read(addr) as u16;
-            let hi = self.read(addr + 1) as u16;
-            (hi << 8) | lo
-        }
-    }
-
     fn peek(&self, addr: usize) -> u8 {
         match addr {
-            0x00000000..=0x00003FFF => self.bios_rom.peek(addr),
-            0x02000000..=0x0203FFFF => self.ewram.peek(addr - 0x02000000),
-            0x03000000..=0x0307FFFF => self.iwram.peek(addr - 0x03000000),
-            0x04000000..=0x040003FE => {
-                if addr == 0x04000006 {
-                    (((self.cycles / 1232) % 228) as u8) & 0xFF
-                } else {
-                    0 // TODO
-                }
-            }
-            0x05000000..=0x050003FF => self.palette_ram.peek(addr - 0x05000000),
-            0x06000000..=0x06017FFF => self.vram.peek(addr - 0x06000000),
-            0x08000000..=0x0DFFFFFF => {
-                // println!("Read gamepak!");
-                // 0
-                self.cart_rom.peek((addr - 0x08000000) % 0x400000)
-            }
-            _ => 0, // TODO: What to do here?
-        }
-    }
-
-    fn write_u16(&mut self, addr: usize, data: u16) {
-        if (0x04000000..=0x040003FE).contains(&addr) {
-            println!("write_u16 register {:8X}: data {:8X}", addr, data);
-            // TODO
-        } else {
-            let hi = (data >> 8) as u8;
-            let lo = (data & 0xff) as u8;
-            self.write(addr, lo);
-            self.write(addr + 1, hi);
+            0x00000000..=0x00003FFF => self.bios_rom[addr],
+            0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000],
+            0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
+            0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000],
+            _ => self.memory.peek(addr),
         }
     }
 
     fn write(&mut self, addr: usize, data: u8) {
         match addr {
-            0x02000000..=0x0203FFFF => self.ewram.write(addr - 0x02000000, data),
-            0x03000000..=0x0307FFFF => self.iwram.write(addr - 0x03000000, data),
-            0x05000000..=0x050003FF => self.palette_ram.write(addr - 0x05000000, data),
-            0x06000000..=0x06017FFF => self.vram.write(addr - 0x06000000, data),
-            _ => {} // TODO: What to do here?
+            0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000] = data,
+            0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000] = data,
+            0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000] = data,
+            _ => self.memory.write(addr, data),
         }
     }
 }
