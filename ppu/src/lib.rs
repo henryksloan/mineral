@@ -20,6 +20,7 @@ pub struct PPU {
 
     lcd_control_reg: LcdControlReg,
     bg_control_regs: [BgControlReg; 4],
+    scroll_regs: [(ScrollReg, ScrollReg); 4],
 
     framebuffer: [u8; 240 * 160 * 2],
     frame_ready: bool,
@@ -45,6 +46,12 @@ impl PPU {
                 BgControlReg(0),
                 BgControlReg(0),
                 BgControlReg(0),
+            ],
+            scroll_regs: [
+                (ScrollReg(0), ScrollReg(0)),
+                (ScrollReg(0), ScrollReg(0)),
+                (ScrollReg(0), ScrollReg(0)),
+                (ScrollReg(0), ScrollReg(0)),
             ],
 
             framebuffer: [0; 240 * 160 * 2],
@@ -92,25 +99,53 @@ impl PPU {
         // TODO: Lots of this logic can be abstracted and modularized
         match self.lcd_control_reg.bg_mode() {
             0 => {
-                // TODO: Scroll
+                let (n_bg_cols, n_bg_rows) = match self.bg_control_regs[0].size() {
+                    0b00 => (32, 32),
+                    0b01 => (64, 32),
+                    0b10 => (32, 64),
+                    0b11 | _ => (64, 64),
+                };
+
+                let offset_x = (self.scroll_regs[0].0.offset() as usize) % (n_bg_cols * 8);
+                let offset_y = (self.scroll_regs[0].1.offset() as usize) % (n_bg_rows * 8);
+
                 let map_base = self.bg_control_regs[0].screen_block() as usize * 0x800;
-                let tile_row = self.scan_line as usize / 8;
-                for tile_col in 0..30 {
-                    let map_entry = self
-                        .vram
-                        .borrow_mut()
-                        .read_u16(map_base + 2 * (tile_row * 32 + tile_col));
+                let tile_row = ((self.scan_line as usize + offset_y) / 8) % n_bg_rows;
+                let first_tile_col = (offset_x / 8) % n_bg_cols;
+
+                let row = (self.scan_line as usize + offset_y) % 8;
+                let first_pixel_i = 480 * self.scan_line as usize;
+
+                for tile_col in first_tile_col..(first_tile_col + 31) {
+                    let screen_offset_x = if 31 < tile_col && tile_col < 64 && n_bg_cols == 64 {
+                        0x800
+                    } else {
+                        0
+                    };
+                    let screen_offset_y = if 31 < tile_row && tile_row < 64 && n_bg_rows == 64 {
+                        (n_bg_cols / 32) * 0x800
+                    } else {
+                        0
+                    };
+                    let map_entry = self.vram.borrow_mut().read_u16(
+                        map_base
+                            + screen_offset_x
+                            + screen_offset_y
+                            + 2 * (tile_row * 32 + (tile_col % 32)),
+                    );
                     let tile_n = map_entry & 0b11_1111_1111;
                     let flip_h = (map_entry >> 10) & 1 == 1;
                     let flip_v = (map_entry >> 11) & 1 == 1;
                     let palette_n = (map_entry >> 12) & 0b1111;
-                    let row = self.scan_line as usize % 8;
                     for byte_n in 0..4 {
+                        let pixel_x_offset = ((tile_col - first_tile_col) * 8 + 2 * byte_n)
+                            as isize
+                            - (offset_x as isize) % 8;
                         let data = self.vram.borrow_mut().read(
                             0x4000 * self.bg_control_regs[0].char_block() as usize
                                 + 32 * tile_n as usize
-                                + row * 4
-                                + byte_n,
+                                + (if flip_v { 7 - row } else { row }) * 4
+                                + (if flip_h { 3 - byte_n } else { byte_n }),
                         );
                         let color_i_left = data & 0b1111;
                         let color_left = self
@@ -122,18 +157,20 @@ impl PPU {
                             .palette_ram
                             .borrow_mut()
                             .read_u16(2 * (palette_n as usize * 16 + color_i_right as usize));
-                        self.framebuffer
-                            [480 * (8 * tile_row + row) + 16 * tile_col + 4 * byte_n + 0] =
-                            color_left as u8;
-                        self.framebuffer
-                            [480 * (8 * tile_row + row) + 16 * tile_col + 4 * byte_n + 1] =
-                            (color_left >> 8) as u8;
-                        self.framebuffer
-                            [480 * (8 * tile_row + row) + 16 * tile_col + 4 * byte_n + 2] =
-                            color_right as u8;
-                        self.framebuffer
-                            [480 * (8 * tile_row + row) + 16 * tile_col + 4 * byte_n + 3] =
-                            (color_right >> 8) as u8;
+                        if pixel_x_offset >= 0 && pixel_x_offset <= 239 {
+                            self.framebuffer[first_pixel_i + 2 * (pixel_x_offset as usize) + 0] =
+                                color_left as u8;
+                            self.framebuffer[first_pixel_i + 2 * (pixel_x_offset as usize) + 1] =
+                                (color_left >> 8) as u8;
+                        }
+                        if pixel_x_offset >= -1 && (pixel_x_offset + 1) <= 239 {
+                            self.framebuffer
+                                [(first_pixel_i as isize + 2 * pixel_x_offset + 2) as usize] =
+                                color_right as u8;
+                            self.framebuffer
+                                [(first_pixel_i as isize + 2 * pixel_x_offset + 3) as usize] =
+                                (color_right >> 8) as u8;
+                        }
                     }
                 }
             }
@@ -188,6 +225,7 @@ impl Memory for PPU {
         match addr {
             0x000 => self.lcd_control_reg.set_lo_byte(data),
             0x001 => self.lcd_control_reg.set_hi_byte(data),
+
             0x008 => self.bg_control_regs[0].set_lo_byte(data),
             0x009 => self.bg_control_regs[0].set_hi_byte(data),
             0x00A => self.bg_control_regs[1].set_lo_byte(data),
@@ -196,6 +234,23 @@ impl Memory for PPU {
             0x00D => self.bg_control_regs[2].set_hi_byte(data),
             0x00E => self.bg_control_regs[3].set_lo_byte(data),
             0x00F => self.bg_control_regs[3].set_hi_byte(data),
+
+            0x010 => self.scroll_regs[0].0.set_lo_byte(data),
+            0x011 => self.scroll_regs[0].0.set_hi_byte(data),
+            0x012 => self.scroll_regs[0].1.set_lo_byte(data),
+            0x013 => self.scroll_regs[0].1.set_hi_byte(data),
+            0x014 => self.scroll_regs[1].0.set_lo_byte(data),
+            0x015 => self.scroll_regs[1].0.set_hi_byte(data),
+            0x016 => self.scroll_regs[1].1.set_lo_byte(data),
+            0x017 => self.scroll_regs[1].1.set_hi_byte(data),
+            0x018 => self.scroll_regs[2].0.set_hi_byte(data),
+            0x019 => self.scroll_regs[2].0.set_hi_byte(data),
+            0x01A => self.scroll_regs[2].1.set_hi_byte(data),
+            0x01B => self.scroll_regs[2].1.set_hi_byte(data),
+            0x01C => self.scroll_regs[3].0.set_hi_byte(data),
+            0x01D => self.scroll_regs[3].0.set_hi_byte(data),
+            0x01E => self.scroll_regs[3].1.set_hi_byte(data),
+            0x01F => self.scroll_regs[3].1.set_hi_byte(data),
             _ => {}
         }
     }
