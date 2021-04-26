@@ -1,5 +1,10 @@
+#[macro_use]
+extern crate bitfield;
+
+mod dma_controller;
 mod key_controller;
 
+use crate::dma_controller::DmaController;
 use crate::key_controller::KeyController;
 
 use cpu::CPU;
@@ -14,6 +19,7 @@ pub struct GBA {
     ppu: Rc<RefCell<PPU>>,
 
     key_controller: Rc<RefCell<KeyController>>,
+    dma_controller: Rc<RefCell<DmaController>>,
 }
 
 impl GBA {
@@ -29,18 +35,18 @@ impl GBA {
         )));
 
         let key_controller = Rc::new(RefCell::new(KeyController::new()));
+        let dma_controller = Rc::new(RefCell::new(DmaController::new()));
 
-        let mmu = Box::new(MemoryMap {
+        let mmu = Rc::new(RefCell::new(MemoryMap {
             vram: vram.clone(),
             palette_ram: palette_ram.clone(),
             oam: oam.clone(),
             ppu: ppu.clone(),
             key_controller: key_controller.clone(),
-        });
+            dma_controller: dma_controller.clone(),
+        }));
 
-        // TODO: Initialize the DMA controller with the MMU Rc
-
-        let cpu = Rc::new(RefCell::new(CPU::new(mmu)));
+        let cpu = Rc::new(RefCell::new(CPU::new(mmu.clone())));
 
         // TODO: Initialize interrupt controller
 
@@ -48,6 +54,7 @@ impl GBA {
             cpu,
             ppu,
             key_controller,
+            dma_controller,
         }
     }
 
@@ -60,10 +67,11 @@ impl GBA {
         //          self.cpu.irq();
         //     }
         // }
-        self.ppu.borrow_mut().tick()
+        self.ppu.borrow_mut().tick();
         // TODO: Tick APU
         // TODO: Tick timer unit, possibly alerting interrupt controller
-        // TODO: Tick DMA controller which should make some copies and possibly alert interrupt
+        self.dma_controller.borrow_mut().tick(self.cpu.clone()); // TODO: Interrupts
+
         // TODO: When a frame is ready, the GBA should expose the framebuffer,
         // TODO: and the frontend can read it AND THEN update keypad state
     }
@@ -93,6 +101,7 @@ struct MemoryMap {
 
     ppu: Rc<RefCell<PPU>>,
     key_controller: Rc<RefCell<KeyController>>,
+    dma_controller: Rc<RefCell<DmaController>>,
 }
 
 impl Memory for MemoryMap {
@@ -104,6 +113,7 @@ impl Memory for MemoryMap {
 
             // IO map
             0x04000000..=0x04000057 => self.ppu.borrow().peek(addr - 0x04000000),
+            0x040000B0..=0x040000E1 => self.dma_controller.borrow().peek(addr - 0x04000000),
             0x04000130..=0x04000133 => self.key_controller.borrow().peek(addr - 0x04000000),
             _ => 0,
         }
@@ -117,6 +127,10 @@ impl Memory for MemoryMap {
 
             // IO map
             0x04000000..=0x04000057 => self.ppu.borrow_mut().write(addr - 0x04000000, data),
+            0x040000B0..=0x040000E1 => self
+                .dma_controller
+                .borrow_mut()
+                .write(addr - 0x04000000, data),
             0x04000130..=0x04000133 => self
                 .key_controller
                 .borrow_mut()

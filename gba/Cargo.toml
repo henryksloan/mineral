@@ -8,3 +8,4 @@ edition = "2018"
 cpu = { path = "../cpu" }
 ppu = { path = "../ppu" }
 memory = { path = "../memory" }
+bitfield = "0.13.2"
