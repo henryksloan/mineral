@@ -1,3 +1,5 @@
+use crate::InterruptController;
+
 use memory::Memory;
 
 use std::cell::RefCell;
@@ -40,7 +42,11 @@ impl DmaController {
         }
     }
 
-    pub fn tick(&mut self, memory_rc: Rc<RefCell<dyn Memory>>) {
+    pub fn tick(
+        &mut self,
+        memory_rc: Rc<RefCell<dyn Memory>>,
+        interrupt_controller: Rc<RefCell<InterruptController>>,
+    ) {
         // TODO: HBlank, VBlank timing
         // TODO: Implement accurate transfer timing
         let mut memory = memory_rc.borrow_mut();
@@ -73,6 +79,17 @@ impl DmaController {
                 }
                 self.active_transfers[channel] = None;
                 self.control_regs[channel].set_enable(false);
+                if self.control_regs[channel].irq() {
+                    let mut irq = interrupt_controller.borrow_mut();
+                    match channel {
+                        0 => irq.request_reg.set_dma0(true),
+                        1 => irq.request_reg.set_dma1(true),
+                        2 => irq.request_reg.set_dma2(true),
+                        3 | _ => irq.request_reg.set_dma3(true),
+                    }
+                }
+
+                break;
             }
         }
     }

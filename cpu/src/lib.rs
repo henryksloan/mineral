@@ -7,7 +7,11 @@ use crate::{
     condition::Condition, instruction_type::InstructionType, operating_mode::OperatingMode,
     status_register::StatusRegister,
 };
-use memory::{Memory, RAM, ROM};
+
+use memory::Memory;
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // https://developer.arm.com/documentation/ddi0210/c/Programmer-s-Model/Exceptions/Exception-vectors
 const RESET_VEC: u32 = 0x00000000;
@@ -38,7 +42,7 @@ pub struct CPU {
     irq_register_bank: [u32; 2],
     und_register_bank: [u32; 2],
 
-    memory: Box<dyn Memory>,
+    memory: Rc<RefCell<dyn Memory>>,
     bios_rom: Vec<u8>, // Bios ROM
     ewram: Vec<u8>,    // External work RAM
     iwram: Vec<u8>,    // Internal work RAM
@@ -48,7 +52,7 @@ pub struct CPU {
 }
 
 impl CPU {
-    pub fn new(memory: Box<dyn Memory>) -> Self {
+    pub fn new(memory: Rc<RefCell<dyn Memory>>) -> Self {
         Self {
             cpsr: StatusRegister::new(),
             fiq_spsr: StatusRegister::new(),
@@ -754,6 +758,16 @@ impl CPU {
         self.set_register(15, UND_VEC);
     }
 
+    pub fn irq(&mut self) {
+        println!("Hi!");
+        self.irq_register_bank[1] = self.get_register(15) & !0b1;
+        self.irq_spsr.raw = self.cpsr.raw;
+        self.cpsr.set_mode(OperatingMode::Interrupt);
+        self.cpsr.set_t(false);
+        self.cpsr.set_i(true);
+        self.set_register(15, IRQ_VEC);
+    }
+
     // Decodes a 12-bit operand to a register shifted by an immediate- or register-defined value
     // Returns (shifted result, barrel shifter carry out)
     fn shifted_reg_operand(&self, operand: u32, allow_shift_by_reg: bool) -> (u32, bool) {
@@ -884,7 +898,7 @@ impl Memory for CPU {
             0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000],
             0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
             0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000],
-            _ => self.memory.peek(addr),
+            _ => self.memory.borrow().peek(addr),
         }
     }
 
@@ -893,7 +907,7 @@ impl Memory for CPU {
             0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000] = data,
             0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000] = data,
             0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000] = data,
-            _ => self.memory.write(addr, data),
+            _ => self.memory.borrow_mut().write(addr, data),
         }
     }
 }

@@ -2,9 +2,11 @@
 extern crate bitfield;
 
 mod dma_controller;
+mod interrupt_controller;
 mod key_controller;
 
 use crate::dma_controller::DmaController;
+use crate::interrupt_controller::InterruptController;
 use crate::key_controller::KeyController;
 
 use cpu::CPU;
@@ -20,6 +22,7 @@ pub struct GBA {
 
     key_controller: Rc<RefCell<KeyController>>,
     dma_controller: Rc<RefCell<DmaController>>,
+    interrupt_controller: Rc<RefCell<InterruptController>>,
 }
 
 impl GBA {
@@ -36,6 +39,7 @@ impl GBA {
 
         let key_controller = Rc::new(RefCell::new(KeyController::new()));
         let dma_controller = Rc::new(RefCell::new(DmaController::new()));
+        let interrupt_controller = Rc::new(RefCell::new(InterruptController::new()));
 
         let mmu = Rc::new(RefCell::new(MemoryMap {
             vram: vram.clone(),
@@ -44,22 +48,25 @@ impl GBA {
             ppu: ppu.clone(),
             key_controller: key_controller.clone(),
             dma_controller: dma_controller.clone(),
+            interrupt_controller: interrupt_controller.clone(),
         }));
 
         let cpu = Rc::new(RefCell::new(CPU::new(mmu.clone())));
-
-        // TODO: Initialize interrupt controller
 
         Self {
             cpu,
             ppu,
             key_controller,
             dma_controller,
+            interrupt_controller,
         }
     }
 
     pub fn tick(&mut self) {
         self.cpu.borrow_mut().tick();
+        if self.interrupt_controller.borrow().has_interrupt() {
+            self.cpu.borrow_mut().irq();
+        }
 
         // if !dma_controller.is_active() {
         //     self.cpu.tick()
@@ -70,7 +77,9 @@ impl GBA {
         self.ppu.borrow_mut().tick();
         // TODO: Tick APU
         // TODO: Tick timer unit, possibly alerting interrupt controller
-        self.dma_controller.borrow_mut().tick(self.cpu.clone()); // TODO: Interrupts
+        self.dma_controller
+            .borrow_mut()
+            .tick(self.cpu.clone(), self.interrupt_controller.clone());
 
         // TODO: When a frame is ready, the GBA should expose the framebuffer,
         // TODO: and the frontend can read it AND THEN update keypad state
@@ -102,6 +111,7 @@ struct MemoryMap {
     ppu: Rc<RefCell<PPU>>,
     key_controller: Rc<RefCell<KeyController>>,
     dma_controller: Rc<RefCell<DmaController>>,
+    interrupt_controller: Rc<RefCell<InterruptController>>,
 }
 
 impl Memory for MemoryMap {
@@ -115,6 +125,7 @@ impl Memory for MemoryMap {
             0x04000000..=0x04000057 => self.ppu.borrow().peek(addr - 0x04000000),
             0x040000B0..=0x040000E1 => self.dma_controller.borrow().peek(addr - 0x04000000),
             0x04000130..=0x04000133 => self.key_controller.borrow().peek(addr - 0x04000000),
+            0x04000200..=0x0400020B => self.interrupt_controller.borrow().peek(addr - 0x04000000),
             _ => 0,
         }
     }
@@ -133,6 +144,10 @@ impl Memory for MemoryMap {
                 .write(addr - 0x04000000, data),
             0x04000130..=0x04000133 => self
                 .key_controller
+                .borrow_mut()
+                .write(addr - 0x04000000, data),
+            0x04000200..=0x0400020B => self
+                .interrupt_controller
                 .borrow_mut()
                 .write(addr - 0x04000000, data),
             _ => {}
