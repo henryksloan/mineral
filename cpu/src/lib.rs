@@ -102,7 +102,11 @@ impl CPU {
             _ => Condition::from_u8(((encoding >> 28) & 0xF) as u8),
         };
 
-        if self.log {
+        if pc >= 0x08000000 {
+            self.log = true;
+        }
+
+        if false && self.log && !(0x0804F670..=0x0804F674).contains(&pc) {
             print!(
                 "{:08X}: {:08X} {:<19} {:?} {:08X} {:08X?}",
                 pc,
@@ -895,8 +899,11 @@ impl Memory for CPU {
     fn peek(&self, addr: usize) -> u8 {
         match addr {
             0x00000000..=0x00003FFF => self.bios_rom[addr],
-            0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000],
-            0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
+            // 0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000],
+            0x02000000..=0x02FFFFFF => self.ewram[(addr - 0x02000000) % 0x40000],
+            // 0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
+            0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000],
+            // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000],
             0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000],
             _ => self.memory.borrow().peek(addr),
         }
@@ -904,9 +911,12 @@ impl Memory for CPU {
 
     fn write(&mut self, addr: usize, data: u8) {
         match addr {
-            0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000] = data,
-            0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000] = data,
-            0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000] = data,
+            // 0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000] = data,
+            0x02000000..=0x02FFFFFF => self.ewram[(addr - 0x02000000) % 0x40000] = data,
+            // 0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000] = data,
+            0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000] = data,
+            // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000] = data,
+            0x08000000..=0x0DFFFFFF => {}
             _ => self.memory.borrow_mut().write(addr, data),
         }
     }
