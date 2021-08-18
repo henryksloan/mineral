@@ -41,7 +41,7 @@ impl TimerController {
                 self.prescaler_counters[i] = self.prescaler_counters[i].wrapping_sub(1);
                 if self.prescaler_counters[i] == 0 {
                     self.reload_prescaler(i);
-                    self.counters[i] = self.counters[i].wrapping_add(1);
+                    self.counters[i] = self.counters[i].wrapping_sub(1);
                 }
             }
 
@@ -93,22 +93,21 @@ impl TimerController {
 
 impl Memory for TimerController {
     fn peek(&self, addr: usize) -> u8 {
-        // TODO: Reading reload should return current counter
         match addr {
-            0x100 => self.control_regs[0].byte_0(),
-            0x101 => self.control_regs[0].byte_1(),
+            0x100 => self.counters[0] as u8,
+            0x101 => (self.counters[0] >> 8) as u8,
             0x102 => self.control_regs[0].byte_2(),
             0x103 => self.control_regs[0].byte_3(),
-            0x104 => self.control_regs[1].byte_0(),
-            0x105 => self.control_regs[1].byte_1(),
+            0x104 => self.counters[1] as u8,
+            0x105 => (self.counters[1] >> 8) as u8,
             0x106 => self.control_regs[1].byte_2(),
             0x107 => self.control_regs[1].byte_3(),
-            0x108 => self.control_regs[2].byte_0(),
-            0x109 => self.control_regs[2].byte_1(),
+            0x108 => self.counters[2] as u8,
+            0x109 => (self.counters[2] >> 8) as u8,
             0x10A => self.control_regs[2].byte_2(),
             0x10B => self.control_regs[2].byte_3(),
-            0x10C => self.control_regs[3].byte_0(),
-            0x10D => self.control_regs[3].byte_1(),
+            0x10C => self.counters[3] as u8,
+            0x10D => (self.counters[3] >> 8) as u8,
             0x10E => self.control_regs[3].byte_2(),
             0x10F => self.control_regs[3].byte_3(),
             _ => 0,

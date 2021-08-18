@@ -466,7 +466,8 @@ impl CPU {
             let mut val = self.get_register(op1_reg_n);
             if op1_reg_n == 15 {
                 let shift_immediate = imm_flag || ((encoding >> 4) & 1 == 0);
-                val = val.wrapping_add(self.mode_instr_width() * if shift_immediate { 1 } else { 2 });
+                val =
+                    val.wrapping_add(self.mode_instr_width() * if shift_immediate { 1 } else { 2 });
                 val &= !0b11;
             }
             val
