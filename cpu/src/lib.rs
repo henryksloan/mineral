@@ -102,11 +102,11 @@ impl CPU {
             _ => Condition::from_u8(((encoding >> 28) & 0xF) as u8),
         };
 
-        if pc >= 0x08000000 {
-            self.log = true;
-        }
+        // if pc >= 0x08000000 {
+        //     self.log = true;
+        // }
 
-        if false && self.log && !(0x0804F670..=0x0804F674).contains(&pc) {
+        if self.log && !(0x0804F670..=0x0804F674).contains(&pc) && (pc / 0x100) != 0x2 {
             print!(
                 "{:08X}: {:08X} {:<19} {:?} {:08X} {:08X?}",
                 pc,
@@ -465,7 +465,8 @@ impl CPU {
         let op1_reg = {
             let mut val = self.get_register(op1_reg_n);
             if op1_reg_n == 15 {
-                val = val.wrapping_add(self.mode_instr_width() * if imm_flag { 1 } else { 2 });
+                let shift_immediate = imm_flag || ((encoding >> 4) & 1 == 0);
+                val = val.wrapping_add(self.mode_instr_width() * if shift_immediate { 1 } else { 2 });
                 val &= !0b11;
             }
             val
@@ -763,7 +764,6 @@ impl CPU {
     }
 
     pub fn irq(&mut self) {
-        println!("Hi!");
         self.irq_register_bank[1] = self.get_register(15) & !0b1;
         self.irq_spsr.raw = self.cpsr.raw;
         self.cpsr.set_mode(OperatingMode::Interrupt);

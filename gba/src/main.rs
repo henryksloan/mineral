@@ -1,22 +1,30 @@
 use gba::GBA;
 use memory::Memory;
 
-use std::fs::File;
-use std::io;
-use std::io::prelude::*;
-use std::io::Read;
-use std::io::SeekFrom;
-use std::thread;
-use std::time;
+use std::{
+    env,
+    fs::File,
+    io::{self, prelude::*, Read, SeekFrom},
+    thread, time,
+};
 
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
-use sdl2::keyboard::Scancode;
-use sdl2::pixels::Color;
-use sdl2::pixels::PixelFormatEnum;
-use sdl2::EventPump;
+use sdl2::{
+    event::Event,
+    keyboard::{Keycode, Scancode},
+    pixels::{Color, PixelFormatEnum},
+    EventPump,
+};
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        println!(
+            "usage: {} <GBA file>",
+            args.get(0).unwrap(),
+        );
+        return;
+    }
+
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
@@ -51,47 +59,17 @@ fn main() {
     ];
     // bios[..code.len()].clone_from_slice(&code);
 
-    let mut bios_file = File::open(r"D:\Henry\dev\rust\mineral\gba_bios.bin").unwrap();
+    let mut bios_file = File::open(r"gba_bios.bin").unwrap();
     bios_file.read(&mut bios).expect("buffer overflow");
 
     let mut cart = vec![0; 0x400000];
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\Super Dodge Ball Advance (USA).gba").unwrap();
-    // let mut cart_file = File::open(r"D:\Henry\ROMs\GBA\Advanced Wars  # GBA.GBA").unwrap();
-    // let mut cart_file = File::open(r"D:\Henry\ROMs\GBA\tonc-bin\brin_demo.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\arm_wrestler\armwrestler.gba").unwrap();
-    // let mut cart_file = File::open(r"D:\Henry\ROMs\GBA\test_roms\cpu_test\CPUTest.gba").unwrap();
-    let mut cart_file =
-        File::open(r"D:\Henry\ROMs\GBA\gba-tests-master\memory\memory.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\hello.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\sbb_reg.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\dma_demo.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\cbb_demo.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\key_demo.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\tmr_demo.gba").unwrap();
-    // let mut cart_file = File::open(r"D:\Henry\ROMs\GBA\gba-tests-master\arm\arm.gba").unwrap();
-    // let mut cart_file = File::open(r"D:\Henry\ROMs\GBA\gba-tests-master\thumb\thumb.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\Pokemon - Ruby Version (U) (V1.1).gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\bigmap.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\swi_demo.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\pageflip.gba").unwrap();
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\GBA\test_roms\tonc_gba_demos\prio_demo.gba").unwrap();
-    // let mut cart_file = File::open(r"D:\Henry\ROMs\GBA\gba-tests-master\ppu\stripes.gba").unwrap();
-    // let mut cart = vec![0; 0x800000];
-    // let mut cart_file =
-    //     File::open(r"D:\Henry\ROMs\Harvest Moon - Friends of Mineral Town (U) [!].gba").unwrap();
+    let mut cart_file = match File::open(args[1].clone()) {
+        Ok(file) => file,
+        Err(e) => {
+            println!("error opening file: {}", e);
+            return;
+        }
+    };
     cart_file.read(&mut cart).expect("buffer overflow");
 
     let mut gba = GBA::new();
