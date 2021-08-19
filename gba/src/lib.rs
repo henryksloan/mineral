@@ -69,19 +69,15 @@ impl GBA {
     }
 
     pub fn tick(&mut self) {
-        if self.interrupt_controller.borrow().has_interrupt() {
-            println!("Interrupt!");
-            self.cpu.borrow_mut().irq();
+        if !self.dma_controller.borrow().is_active() {
+            if self.interrupt_controller.borrow().has_interrupt() {
+                println!("Interrupt!");
+                self.cpu.borrow_mut().irq();
+            }
+
+            self.cpu.borrow_mut().tick();
         }
 
-        self.cpu.borrow_mut().tick();
-
-        // if !dma_controller.is_active() {
-        //     self.cpu.tick()
-        //     if self.interrupt_controller.has_interrupt() { // IF register != 0
-        //          self.cpu.irq();
-        //     }
-        // }
         self.ppu.borrow_mut().tick();
         // TODO: Tick APU
         self.timer_controller

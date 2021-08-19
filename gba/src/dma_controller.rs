@@ -42,6 +42,12 @@ impl DmaController {
         }
     }
 
+    pub fn is_active(&self) -> bool {
+        self.active_transfers
+            .iter()
+            .any(|transfer| transfer.is_some())
+    }
+
     pub fn tick(
         &mut self,
         memory_rc: Rc<RefCell<dyn Memory>>,

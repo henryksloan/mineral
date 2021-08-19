@@ -18,10 +18,7 @@ use sdl2::{
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        println!(
-            "usage: {} <GBA file>",
-            args.get(0).unwrap(),
-        );
+        println!("usage: {} <GBA file>", args.get(0).unwrap(),);
         return;
     }
 
@@ -130,14 +127,11 @@ fn main() {
                 }
             }
 
-            let mut controller_data = 0;
             let kb_state = event_pump.keyboard_state();
-            for i in 0..controls.len() {
-                // 0=Pressed, 1=Released
-                let bit = (!kb_state.is_scancode_pressed(controls[i])) as u16;
-                controller_data <<= 1;
-                controller_data |= bit;
-            }
+            let controller_data = controls.iter().fold(0, |acc, control| {
+                (acc << 1) | (!kb_state.is_scancode_pressed(*control)) as u16
+            });
+
             gba.update_key_state(controller_data);
         }
     }
