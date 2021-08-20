@@ -1,4 +1,4 @@
-use crate::InterruptController;
+use crate::interrupt_controller::{self, InterruptController};
 
 use memory::Memory;
 
@@ -88,10 +88,10 @@ impl DmaController {
                 if self.control_regs[channel].irq() {
                     let mut irq = interrupt_controller.borrow_mut();
                     match channel {
-                        0 => irq.request_reg.set_dma0(true),
-                        1 => irq.request_reg.set_dma1(true),
-                        2 => irq.request_reg.set_dma2(true),
-                        3 | _ => irq.request_reg.set_dma3(true),
+                        0 => irq.request(interrupt_controller::IRQ_DMA0),
+                        1 => irq.request(interrupt_controller::IRQ_DMA1),
+                        2 => irq.request(interrupt_controller::IRQ_DMA2),
+                        3 | _ => irq.request(interrupt_controller::IRQ_DMA3),
                     }
                 }
 

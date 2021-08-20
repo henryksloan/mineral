@@ -71,14 +71,38 @@ impl GBA {
     pub fn tick(&mut self) {
         if !self.dma_controller.borrow().is_active() {
             if self.interrupt_controller.borrow().has_interrupt() {
-                println!("Interrupt!");
+                // println!("Interrupt!");
                 self.cpu.borrow_mut().irq();
             }
 
             self.cpu.borrow_mut().tick();
         }
 
-        self.ppu.borrow_mut().tick();
+        let (vblank, hblank, vcounter) = self.ppu.borrow_mut().tick();
+        if vblank {
+            // self.interrupt_controller
+            //     .borrow_mut()
+            //     .request_reg
+            //     .set_vblank(true);
+            self.interrupt_controller
+                .borrow_mut()
+                .request(interrupt_controller::IRQ_VBLANK);
+        }
+        if hblank {
+            // self.interrupt_controller
+            //     .borrow_mut()
+            //     .request_reg
+            //     .set_hblank(true);
+            self.interrupt_controller
+                .borrow_mut()
+                .request(interrupt_controller::IRQ_HBLANK);
+        }
+        if vcounter {
+            self.interrupt_controller
+                .borrow_mut()
+                .request(interrupt_controller::IRQ_VCOUNTER);
+        }
+
         // TODO: Tick APU
         self.timer_controller
             .borrow_mut()
@@ -124,11 +148,11 @@ struct MemoryMap {
 impl Memory for MemoryMap {
     fn peek(&self, addr: usize) -> u8 {
         match addr {
-            // 0x05000000..=0x050003FF => self.palette_ram.borrow().peek(addr - 0x05000000),
             0x05000000..=0x05FFFFFF => self.palette_ram.borrow().peek((addr - 0x05000000) % 0x400),
-            0x06000000..=0x06017FFF => self.vram.borrow().peek(addr - 0x06000000),
-            0x06018000..=0x0601FFFF => self.vram.borrow().peek(addr - 0x06008000),
-            // 0x06020000..=0x060FFFFF => self.peek(((addr - 0x06000000) % 0x20000) + 0x06000000),
+            0x06000000..=0x06FFFFFF => self
+                .vram
+                .borrow()
+                .peek(((addr - 0x06000000) % 0x20000) % 0x18000),
             0x07000000..=0x070003FF => self.oam.borrow().peek(addr - 0x07000000),
 
             // IO map
@@ -143,12 +167,14 @@ impl Memory for MemoryMap {
 
     fn write(&mut self, addr: usize, data: u8) {
         match addr {
-            0x05000000..=0x050003FF => self.palette_ram.borrow_mut().write(addr - 0x05000000, data),
-            0x06000000..=0x06017FFF => self.vram.borrow_mut().write(addr - 0x06000000, data),
-            0x06018000..=0x0601FFFF => self.vram.borrow_mut().write(addr - 0x06008000, data),
-            // 0x06020000..=0x06FFFFFF => {
-            //     self.write(((addr - 0x06000000) % 0x20000) + 0x06000000, data)
-            // }
+            0x05000000..=0x05FFFFFF => self
+                .palette_ram
+                .borrow_mut()
+                .write((addr - 0x05000000) % 0x400, data),
+            0x06000000..=0x06FFFFFF => self
+                .vram
+                .borrow_mut()
+                .write(((addr - 0x06000000) % 0x20000) % 0x18000, data),
             0x07000000..=0x070003FF => self.oam.borrow_mut().write(addr - 0x07000000, data),
 
             // IO map

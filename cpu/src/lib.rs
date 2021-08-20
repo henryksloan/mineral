@@ -824,6 +824,10 @@ impl CPU {
     }
 
     pub fn irq(&mut self) {
+        if self.cpsr.get_i() {
+            return;
+        }
+
         self.irq_register_bank[1] = self.get_register(15) & !0b1;
         self.irq_spsr.raw = self.cpsr.raw;
         self.cpsr.set_mode(OperatingMode::Interrupt);
@@ -957,6 +961,10 @@ impl CPU {
 
 impl Memory for CPU {
     fn peek(&self, addr: usize) -> u8 {
+        if addr >> 8 == 0x03FFFF {
+            return self.peek(0x03007F00 | (addr & 0xFF));
+        }
+
         match addr {
             0x00000000..=0x00003FFF => self.bios_rom[addr],
             // 0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000],
@@ -970,6 +978,11 @@ impl Memory for CPU {
     }
 
     fn write(&mut self, addr: usize, data: u8) {
+        if addr >> 8 == 0x03FFFF {
+            self.write(0x03007F00 | (addr & 0xFF), data);
+            return;
+        }
+
         match addr {
             // 0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000] = data,
             0x02000000..=0x02FFFFFF => self.ewram[(addr - 0x02000000) % 0x40000] = data,

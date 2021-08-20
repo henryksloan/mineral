@@ -1,4 +1,4 @@
-use crate::interrupt_controller::InterruptController;
+use crate::interrupt_controller::{self, InterruptController};
 
 use memory::Memory;
 
@@ -51,10 +51,10 @@ impl TimerController {
                 if self.control_regs[i].irq() {
                     let mut irq = interrupt_controller.borrow_mut();
                     match i {
-                        0 => irq.request_reg.set_timer0(true),
-                        1 => irq.request_reg.set_timer1(true),
-                        2 => irq.request_reg.set_timer2(true),
-                        3 | _ => irq.request_reg.set_timer3(true),
+                        0 => irq.request(interrupt_controller::IRQ_TIMER0),
+                        1 => irq.request(interrupt_controller::IRQ_TIMER1),
+                        2 => irq.request(interrupt_controller::IRQ_TIMER2),
+                        3 | _ => irq.request(interrupt_controller::IRQ_TIMER3),
                     }
                 }
 

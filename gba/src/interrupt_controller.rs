@@ -1,5 +1,20 @@
 use memory::Memory;
 
+pub const IRQ_VBLANK: usize = 0x0;
+pub const IRQ_HBLANK: usize = 0x1;
+pub const IRQ_VCOUNTER: usize = 0x2;
+pub const IRQ_TIMER0: usize = 0x3;
+pub const IRQ_TIMER1: usize = 0x4;
+pub const IRQ_TIMER2: usize = 0x5;
+pub const IRQ_TIMER3: usize = 0x6;
+pub const IRQ_SERIAL: usize = 0x7;
+pub const IRQ_DMA0: usize = 0x8;
+pub const IRQ_DMA1: usize = 0x9;
+pub const IRQ_DMA2: usize = 0xA;
+pub const IRQ_DMA3: usize = 0xB;
+pub const IRQ_KEYPAD: usize = 0xC;
+pub const IRQ_GAMEPAK: usize = 0xD;
+
 pub struct InterruptController {
     master_enable_reg: MasterEnableReg,
     enable_reg: InterruptEnableReg,
@@ -17,6 +32,12 @@ impl InterruptController {
 
     pub fn has_interrupt(&self) -> bool {
         (self.request_reg.0 & 0b11_1111_1111_1111) != 0
+    }
+
+    pub fn request(&mut self, offset: usize) {
+        if self.master_enable_reg.enable() && (self.enable_reg.0 >> offset) & 1 == 1 {
+            self.request_reg.0 |= 1 << offset;
+        }
     }
 }
 
@@ -40,8 +61,14 @@ impl Memory for InterruptController {
         match addr {
             0x200 => self.enable_reg.set_lo_byte(data),
             0x201 => self.enable_reg.set_hi_byte(data),
-            0x202 => self.request_reg.set_lo_byte(data),
-            0x203 => self.request_reg.set_hi_byte(data),
+            // 0x202 => self.request_reg.set_lo_byte(data),
+            // 0x203 => self.request_reg.set_hi_byte(data),
+            0x202 => self
+                .request_reg
+                .set_lo_byte(self.request_reg.lo_byte() & !data),
+            0x203 => self
+                .request_reg
+                .set_hi_byte(self.request_reg.hi_byte() & !data),
 
             0x208 => self.master_enable_reg.set_byte_0(data),
             0x209 => self.master_enable_reg.set_byte_1(data),
