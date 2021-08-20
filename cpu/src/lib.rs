@@ -294,9 +294,12 @@ impl CPU {
             self.write(swap_addr, (source_reg & 0xFF) as u8);
             self.set_register(dest_reg_n, old_data);
         } else {
-            let old_data = self.read_u32(swap_addr);
-            self.write_u32(swap_addr, source_reg);
-            self.set_register(dest_reg_n, old_data);
+            let mut temp = self.read_u32(swap_addr & !0b11);
+            if swap_addr & 0b11 != 0b00 {
+                temp = temp.rotate_right(8 * (swap_addr & 0b11) as u32);
+            }
+            self.write_u32(swap_addr & !0b11, source_reg);
+            self.set_register(dest_reg_n, temp);
         };
     }
 
@@ -336,12 +339,23 @@ impl CPU {
         } as usize;
 
         // TODO: Handle endianness
-        // TODO: Handle special LDR behavior on non-word-aligned addresses
         if load_flag {
             let data = match (encoding >> 5) & 0b11 {
-                0b01 => self.read_u16(transfer_addr) as u32, // Unsigned halfword
-                0b10 => ((self.read(transfer_addr) as i8) as i32) as u32, // Signed byte
-                0b11 => ((self.read_u16(transfer_addr) as i16) as i32) as u32, // Signed halfword
+                0b01 => {
+                    let mut val = self.read_u16(transfer_addr & !0b1) as u32; // Unsigned halfword
+                    if transfer_addr & 0b1 != 0b0 {
+                        val = val.rotate_right(8);
+                    }
+                    val
+                }
+                0b10 => ((self.read(transfer_addr & !0b1) as i8) as i32) as u32, // Signed byte
+                0b11 => {
+                    let mut val = (self.read_u16(transfer_addr & !0b1) as i16) as i32; // Signed halfword
+                    if transfer_addr & 0b1 != 0b0 {
+                        val = val >> 8;
+                    }
+                    val as u32
+                }
                 0b00 | _ => panic!("SWP format encountered in halfword transfer instruction"),
             };
             self.set_register(source_dest_reg_n, data);
@@ -355,7 +369,7 @@ impl CPU {
                 val
             };
             match (encoding >> 5) & 0b11 {
-                0b01 => self.write_u16(transfer_addr, (data & 0xFFFF) as u16), // Unsigned halfword
+                0b01 => self.write_u16(transfer_addr & !0b1, (data & 0xFFFF) as u16), // Unsigned halfword
                 0b10 | 0b11 => panic!("signed transfers used with store instructions"),
                 0b00 | _ => panic!("SWP format encountered in halfword transfer instruction"),
             }
@@ -364,7 +378,8 @@ impl CPU {
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if (write_back_flag || !pre_index_flag) && (source_dest_reg_n != base_reg_n) {
+        if (write_back_flag || !pre_index_flag) && (!load_flag || (source_dest_reg_n != base_reg_n))
+        {
             self.set_register(base_reg_n, offset_addr);
         }
     }
@@ -422,7 +437,7 @@ impl CPU {
             let data = {
                 let mut val = self.get_register(source_dest_reg_n);
                 if source_dest_reg_n == 15 {
-                    val = val.wrapping_add(self.mode_instr_width());
+                    val = val.wrapping_add(2 * self.mode_instr_width());
                     val &= !0b11;
                 }
                 val
@@ -430,14 +445,15 @@ impl CPU {
             if byte_flag {
                 self.write(transfer_addr, (data & 0xFF) as u8);
             } else {
-                self.write_u32(transfer_addr, data);
+                self.write_u32(transfer_addr & !0b11, data);
             }
         }
 
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if (write_back_flag || !pre_index_flag) && (source_dest_reg_n != base_reg_n) {
+        if (write_back_flag || !pre_index_flag) && (!load_flag || (source_dest_reg_n != base_reg_n))
+        {
             self.set_register(base_reg_n, offset_addr);
         }
     }
@@ -583,7 +599,7 @@ impl CPU {
                 if let Some(spsr) = self.get_mode_spsr() {
                     self.cpsr.raw = spsr.raw;
                 } else {
-                    panic!("attempted to copy from SPSR in User or System mode");
+                    // panic!("attempted to copy from SPSR in User or System mode");
                 }
             } else {
                 if let Some(new_overflow) = overflow {
@@ -598,9 +614,14 @@ impl CPU {
 
     fn move_psr_into_reg(&mut self, use_spsr_flag: bool, dest_reg_n: usize) {
         let val = if use_spsr_flag {
-            self.get_mode_spsr()
-                .expect("attempted to get SPSR in non-privileged mode")
-                .raw
+            // self.get_mode_spsr()
+            //     .expect("attempted to get SPSR in non-privileged mode")
+            //     .raw
+            if let Some(spsr) = self.get_mode_spsr() {
+                spsr.raw
+            } else {
+                self.cpsr.raw
+            }
         } else {
             self.cpsr.raw
         };
@@ -625,11 +646,15 @@ impl CPU {
             | if flags_mask { 0xFF << 24 } else { 0 };
 
         if use_spsr_flag {
-            let spsr = self
-                .get_mode_spsr()
-                .expect("attempted to get SPSR in non-privileged mode");
-            (*spsr).raw &= !mask;
-            (*spsr).raw |= val & mask;
+            // let spsr = self
+            //     .get_mode_spsr()
+            //     .expect("attempted to get SPSR in non-privileged mode");
+            // (*spsr).raw &= !mask;
+            // (*spsr).raw |= val & mask;
+            if let Some(spsr) = self.get_mode_spsr() {
+                (*spsr).raw &= !mask;
+                (*spsr).raw |= val & mask;
+            }
         } else {
             self.cpsr.raw &= !mask;
             self.cpsr.raw |= val & mask;
@@ -643,9 +668,16 @@ impl CPU {
         let write_back_flag = (encoding >> 21) & 1 == 1;
         let load_flag = (encoding >> 20) & 1 == 1;
 
-        let reg_n_list = (0..16)
-            .filter(|i| (encoding >> i) & 1 == 1)
-            .collect::<Vec<usize>>();
+        let (reg_n_list, empty_list) = {
+            let list = (0..16)
+                .filter(|i| (encoding >> i) & 1 == 1)
+                .collect::<Vec<usize>>();
+            if list.is_empty() {
+                (vec![15], true)
+            } else {
+                (list, false)
+            }
+        };
         let pc_in_list = (encoding >> 15) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
@@ -656,6 +688,12 @@ impl CPU {
             base_reg
                 .wrapping_sub(4 * reg_n_list.len() as u32)
                 .wrapping_add(if !pre_index_flag { 4 } else { 0 })
+        };
+        let init_transfer_addr = transfer_addr;
+        let offset_addr = if up_flag {
+            base_reg.wrapping_add(4 * reg_n_list.len() as u32)
+        } else {
+            base_reg.wrapping_sub(4 * reg_n_list.len() as u32)
         };
 
         for reg_n in &reg_n_list {
@@ -677,29 +715,50 @@ impl CPU {
                         .raw;
                 }
             } else {
-                // If S flag is set and r15 is not in the list, the user bank is used
-                if psr_force_user_flag {
-                    self.write_u32(transfer_addr as usize, self.registers[*reg_n])
-                } else {
-                    self.write_u32(transfer_addr as usize, self.get_register(*reg_n))
-                }
+                let val = {
+                    let mut reg = if *reg_n == base_reg_n {
+                        if reg_n_list.first() == Some(&reg_n) {
+                            base_reg
+                        } else {
+                            if pre_index_flag {
+                                offset_addr
+                            } else {
+                                if up_flag {
+                                    offset_addr
+                                } else {
+                                    init_transfer_addr.wrapping_sub(4)
+                                }
+                            }
+                        }
+                    } else {
+                        if psr_force_user_flag {
+                            self.registers[*reg_n]
+                        } else {
+                            self.get_register(*reg_n)
+                        }
+                    };
+                    if *reg_n == 15 {
+                        reg += 8;
+                    }
+                    reg
+                };
+                self.write_u32(transfer_addr as usize, val);
             }
 
             transfer_addr += 4;
         }
 
-        let base_reg_in_reg_list = (encoding >> base_reg_n) & 1 == 1;
-        if write_back_flag
-            && (!base_reg_in_reg_list
-                || reg_n_list.len() == 1
-                || reg_n_list.last() != Some(&base_reg_n))
-        {
-            let offset_addr = if up_flag {
-                base_reg.wrapping_add(4 * reg_n_list.len() as u32)
-            } else {
-                base_reg.wrapping_sub(4 * reg_n_list.len() as u32)
-            };
-            self.set_register(base_reg_n, offset_addr)
+        if empty_list {
+            self.set_register(base_reg_n, base_reg + 0x40);
+        } else {
+            let base_reg_in_reg_list = (encoding >> base_reg_n) & 1 == 1;
+            if write_back_flag
+                && (!base_reg_in_reg_list
+                    || (!load_flag
+                        && (reg_n_list.len() == 1 || reg_n_list.last() != Some(&base_reg_n))))
+            {
+                self.set_register(base_reg_n, offset_addr);
+            }
         }
     }
 
