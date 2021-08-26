@@ -177,17 +177,21 @@ impl InstructionType {
             let rm = (encoding >> 6) & 0b111;
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
-            let (hi_8, lo_4) = match op {
-                0b000 => (0b01111000, 0b0000),     // STR
-                0b001 => (0b00011000, 0b1011),     // STRH
-                0b010 => (0b01111100, 0b0000),     // STRB
-                0b011 => (0b00011001, 0b1101),     // LDRSB
-                0b100 => (0b01111001, 0b0000),     // LDR
-                0b101 => (0b00011001, 0b1011),     // LDRH
-                0b110 => (0b01111101, 0b0000),     // LDRB
-                0b111 | _ => (0b00011001, 0b1111), // LDRSH
+            let (hi_8, lo_4, halfword) = match op {
+                0b000 => (0b01111000, 0b0000, false),    // STR
+                0b001 => (0b00011000, 0b1011, true),     // STRH
+                0b010 => (0b01111100, 0b0000, false),    // STRB
+                0b011 => (0b00011001, 0b1101, true),     // LDRSB
+                0b100 => (0b01111001, 0b0000, false),    // LDR
+                0b101 => (0b00011001, 0b1011, true),     // LDRH
+                0b110 => (0b01111101, 0b0000, false),    // LDRB
+                0b111 | _ => (0b00011001, 0b1111, true), // LDRSH
             };
-            instr_type = Some(InstructionType::SingleTransfer);
+            instr_type = if halfword {
+                Some(InstructionType::HalfwordTransferReg)
+            } else {
+                Some(InstructionType::SingleTransfer)
+            };
             (0b1110 << 28) | (hi_8 << 20) | (rn << 16) | (rd << 12) | (lo_4 << 4) | rm
         } else if hi_n(3) == 0b011 {
             // Load/store word/byte immediate offset

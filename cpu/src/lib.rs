@@ -72,7 +72,7 @@ impl CPU {
             bios_rom: vec![0; 0x4000],
             ewram: vec![0; 0x40000],
             iwram: vec![0; 0x8000],
-            cart_rom: vec![0; 0x400000],
+            cart_rom: Vec::new(),
 
             log: false,
         }
@@ -161,7 +161,7 @@ impl CPU {
     }
 
     pub fn flash_cart(&mut self, data: Vec<u8>) {
-        self.cart_rom = vec![0; 0x400000];
+        self.cart_rom = vec![0; data.len()];
         self.cart_rom[..data.len()].clone_from_slice(&data);
     }
 
@@ -348,7 +348,7 @@ impl CPU {
                     }
                     val
                 }
-                0b10 => ((self.read(transfer_addr & !0b1) as i8) as i32) as u32, // Signed byte
+                0b10 => ((self.read(transfer_addr) as i8) as i32) as u32, // Signed byte
                 0b11 => {
                     let mut val = (self.read_u16(transfer_addr & !0b1) as i16) as i32; // Signed halfword
                     if transfer_addr & 0b1 != 0b0 {
@@ -972,7 +972,7 @@ impl Memory for CPU {
             // 0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
             0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000],
             // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000],
-            0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000],
+            0x08000000..=0x0DFFFFFF => self.cart_rom[addr - 0x08000000],
             _ => self.memory.borrow().peek(addr),
         }
     }

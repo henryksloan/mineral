@@ -59,7 +59,7 @@ fn main() {
     let mut bios_file = File::open(r"gba_bios.bin").unwrap();
     bios_file.read(&mut bios).expect("buffer overflow");
 
-    let mut cart = vec![0; 0x400000];
+    let mut cart = vec![0; 0x800000];
     let mut cart_file = match File::open(args[1].clone()) {
         Ok(file) => file,
         Err(e) => {
