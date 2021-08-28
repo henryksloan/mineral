@@ -1,8 +1,10 @@
 #[macro_use]
 extern crate bitfield;
 
+mod obj_attrs;
 mod registers;
 
+use obj_attrs::*;
 use registers::*;
 
 use std::cell::RefCell;
@@ -93,6 +95,7 @@ impl PPU {
                 if self.lcd_status_reg.vblank_irq() {
                     vblank = true;
                 }
+                self.draw_sprites();
             }
         } else if self.scan_cycle == 960 {
             if self.lcd_status_reg.hblank_irq() {
@@ -307,6 +310,47 @@ impl PPU {
         }
 
         out
+    }
+
+    fn draw_sprites(&mut self) {
+        for sprite_n in 0..128 {
+            let oam_addr = 8 * sprite_n;
+            let attr0 = ObjAttr0(self.oam.borrow_mut().read_u16(oam_addr + 0));
+            let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
+            let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
+
+            if !attr0.affine() && attr0.disable() {
+                continue;
+            }
+
+            let size = {
+                let size_map = match attr0.shape() {
+                    0 => [(1, 1), (2, 2), (4, 4), (8, 8)], // Square
+                    1 => [(2, 1), (4, 1), (4, 2), (8, 4)], // Horizontal
+                    2 => [(1, 2), (1, 4), (2, 4), (4, 8)], // Vertical
+                    _ => continue,                         // panic!("Illegal obj shape"),
+                };
+                size_map[attr1.size() as usize]
+            };
+
+            for row in 0..size.1 {
+                let y = attr0.y_coord() + 8 * row;
+
+                for col in 0..size.0 {
+                    let x = attr1.x_coord() + 8 * col;
+                    for pixel_y in 0..8 {
+                        for pixel_x in 0..8 {
+                            let pixel_i =
+                                (y as usize + pixel_y) * 480 + 2 * x as usize + 2 * pixel_x;
+                            if pixel_i < self.framebuffer.len() {
+                                self.framebuffer[pixel_i + 0] = 0xFF;
+                                self.framebuffer[pixel_i + 1] = 0x00;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
