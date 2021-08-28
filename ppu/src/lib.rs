@@ -1,8 +1,10 @@
 #[macro_use]
 extern crate bitfield;
 
+mod obj_attrs;
 mod registers;
 
+use obj_attrs::*;
 use registers::*;
 
 use std::cell::RefCell;
@@ -93,6 +95,7 @@ impl PPU {
                 if self.lcd_status_reg.vblank_irq() {
                     vblank = true;
                 }
+                self.draw_sprites();
             }
         } else if self.scan_cycle == 960 {
             if self.lcd_status_reg.hblank_irq() {
@@ -140,25 +143,29 @@ impl PPU {
                     })
                     .collect::<Vec<((u16, usize), [u8; 480])>>();
 
-                if lines.len() == 0 {
-                    return;
-                }
-
                 lines.sort_by_key(|tuple| tuple.0);
 
                 let first_pixel_i = 480 * self.scan_line as usize;
+                let mut found_pixel = false;
                 for i in 0..240 {
                     let mut color = (0, 0);
                     for line in &lines {
                         if line.1[i * 2] != 0 || line.1[i * 2 + 1] != 0 {
                             color.0 = line.1[i * 2];
                             color.1 = line.1[i * 2 + 1];
+                            found_pixel = true;
                             break;
                         }
                     }
+
                     let pixel_i = first_pixel_i + 2 * i;
-                    self.framebuffer[pixel_i + 0] = color.0;
-                    self.framebuffer[pixel_i + 1] = color.1;
+                    if found_pixel {
+                        self.framebuffer[pixel_i + 0] = color.0;
+                        self.framebuffer[pixel_i + 1] = color.1;
+                    } else {
+                        self.framebuffer[pixel_i + 0] = 0;
+                        self.framebuffer[pixel_i + 1] = 0;
+                    }
                 }
             }
             1 => {}
@@ -192,7 +199,27 @@ impl PPU {
                     pixel_i += 2;
                 }
             }
-            5 => {}
+            5 => {
+                let y = self.scan_line as usize;
+                let mut pixel_i = 480 * y;
+                let page_base = if self.lcd_control_reg.frame_select() {
+                    0xA000
+                } else {
+                    0
+                };
+                for x in 0..240 {
+                    let color = if y >= 128 || x >= 160 {
+                        0
+                    } else {
+                        self.vram
+                            .borrow_mut()
+                            .read_u16(page_base + 2 * (x + 160 * y))
+                    };
+                    self.framebuffer[pixel_i + 0] = color as u8;
+                    self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
+                    pixel_i += 2;
+                }
+            }
             _ => panic!("illegal video mode"),
         }
     }
@@ -287,6 +314,101 @@ impl PPU {
         }
 
         out
+    }
+
+    fn draw_sprites(&mut self) {
+        for sprite_n in 0..128 {
+            let oam_addr = 8 * sprite_n;
+            let attr0 = ObjAttr0(self.oam.borrow_mut().read_u16(oam_addr + 0));
+            let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
+            let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
+
+            let bytes_per_tile = if attr0.colors() { 2 } else { 1 };
+
+            if !attr0.affine() && attr0.disable() {
+                continue;
+            }
+
+            let size = {
+                let size_map = match attr0.shape() {
+                    0 => [(1, 1), (2, 2), (4, 4), (8, 8)], // Square
+                    1 => [(2, 1), (4, 1), (4, 2), (8, 4)], // Horizontal
+                    2 => [(1, 2), (1, 4), (2, 4), (4, 8)], // Vertical
+                    _ => continue,                         // panic!("Illegal obj shape"),
+                };
+                size_map[attr1.size() as usize]
+            };
+
+            for row in 0..size.1 {
+                let y = attr0.y_coord() + 8 * row;
+                let row_start = attr2.tile()
+                    + (if attr1.flip_v() {
+                        (size.1 - 1) - row
+                    } else {
+                        row
+                    }) * if self.lcd_control_reg.obj_char_mapping() {
+                        size.0 * bytes_per_tile // 1D
+                    } else {
+                        0x20 // 2D
+                    };
+
+                for col in 0..size.0 {
+                    let tile_n = row_start
+                        + (if attr1.flip_h() {
+                            (size.0 - 1) - col
+                        } else {
+                            col
+                        }) * bytes_per_tile;
+                    let x = attr1.x_coord() + 8 * col;
+                    for pixel_y in 0..8 {
+                        // TODO: Add support for 256-color mode
+                        for byte_n in 0..4 {
+                            let pixel_x_offset = x + 2 * byte_n;
+                            let data = self.vram.borrow_mut().read(
+                                0x4000 * 4
+                                    + 32 * tile_n as usize
+                                    + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 4
+                                    + (if attr1.flip_h() {
+                                        3 - byte_n as usize
+                                    } else {
+                                        byte_n as usize
+                                    }),
+                            );
+                            let mut color_i_left = data & 0b1111;
+                            let mut color_left = self.palette_ram.borrow_mut().read_u16(
+                                0x200 + 2 * (attr2.palette() as usize * 16 + color_i_left as usize),
+                            );
+                            let mut color_i_right = (data >> 4) & 0b1111;
+                            let mut color_right = self.palette_ram.borrow_mut().read_u16(
+                                0x200
+                                    + 2 * (attr2.palette() as usize * 16 + color_i_right as usize),
+                            );
+                            if attr1.flip_h() {
+                                std::mem::swap(&mut color_i_left, &mut color_i_right);
+                                std::mem::swap(&mut color_left, &mut color_right);
+                            }
+                            if y as usize + pixel_y < 160 {
+                                if pixel_x_offset <= 239 && color_i_left != 0 {
+                                    self.framebuffer[(y as usize + pixel_y) * 480
+                                        + 2 * (pixel_x_offset as usize)
+                                        + 0] = color_left as u8;
+                                    self.framebuffer[(y as usize + pixel_y) * 480
+                                        + 2 * (pixel_x_offset as usize)
+                                        + 1] = (color_left >> 8) as u8;
+                                }
+                                if (pixel_x_offset + 1) <= 239 && color_i_right != 0 {
+                                    self.framebuffer[(y as usize + pixel_y) * 480
+                                        + (2 * pixel_x_offset + 2) as usize] = color_right as u8;
+                                    self.framebuffer[(y as usize + pixel_y) * 480
+                                        + (2 * pixel_x_offset + 3) as usize] =
+                                        (color_right >> 8) as u8;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -58,15 +58,34 @@ impl DmaController {
         let mut memory = memory_rc.borrow_mut();
         for channel in 0..4 {
             if let Some(active_transfer) = &mut self.active_transfers[channel] {
-                for _ in 0..active_transfer.0.n_units() as usize {
+                let mut n_units = match active_transfer.0.n_units() {
+                    0 => {
+                        if channel == 3 {
+                            0x10000
+                        } else {
+                            0x4000
+                        }
+                    }
+                    n_units => n_units,
+                };
+                if channel == 3 {
+                    n_units = std::cmp::min(n_units, 0x10000);
+                } else {
+                    n_units = std::cmp::min(n_units, 0x4000);
+                }
+                for _ in 0..n_units {
                     let unit_size = if active_transfer.0.unit_size() { 4 } else { 2 };
 
-                    if unit_size == 4 {
-                        let data = memory.read_u32(active_transfer.1);
-                        memory.write_u32(active_transfer.2, data);
-                    } else {
-                        let data = memory.read_u16(active_transfer.1);
-                        memory.write_u16(active_transfer.2, data);
+                    if !((0x040000B0..=0x040000E1).contains(&active_transfer.1))
+                        && !((0x040000B0..=0x040000E1).contains(&active_transfer.2))
+                    {
+                        if unit_size == 4 {
+                            let data = memory.read_u32(active_transfer.1);
+                            memory.write_u32(active_transfer.2, data);
+                        } else {
+                            let data = memory.read_u16(active_transfer.1);
+                            memory.write_u16(active_transfer.2, data);
+                        }
                     }
 
                     match active_transfer.0.dest_adjustment() {
@@ -107,11 +126,21 @@ impl DmaController {
         let start_timing = self.control_regs[channel_n].start_timing();
         if start_timing == 0 {
             let new_enable = self.control_regs[channel_n].enable();
+            let source = if channel_n == 0 {
+                self.source_regs[channel_n].internal_addr_bits()
+            } else {
+                self.source_regs[channel_n].external_addr_bits()
+            };
+            let dest = if channel_n == 3 {
+                self.dest_regs[channel_n].external_addr_bits()
+            } else {
+                self.dest_regs[channel_n].internal_addr_bits()
+            };
             if !old_enable && new_enable {
                 self.active_transfers[channel_n] = Some((
                     DmaControlReg(self.control_regs[channel_n].0),
-                    self.source_regs[channel_n].external_addr_bits() as usize,
-                    self.dest_regs[channel_n].external_addr_bits() as usize,
+                    source as usize,
+                    dest as usize,
                 ));
             }
         }
