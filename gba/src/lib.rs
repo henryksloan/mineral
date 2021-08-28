@@ -1,6 +1,15 @@
-mod key_controller;
+#[macro_use]
+extern crate bitfield;
 
+mod dma_controller;
+mod interrupt_controller;
+mod key_controller;
+mod timer_controller;
+
+use crate::dma_controller::DmaController;
+use crate::interrupt_controller::InterruptController;
 use crate::key_controller::KeyController;
+use crate::timer_controller::TimerController;
 
 use cpu::CPU;
 use memory::{Memory, RAM};
@@ -14,6 +23,9 @@ pub struct GBA {
     ppu: Rc<RefCell<PPU>>,
 
     key_controller: Rc<RefCell<KeyController>>,
+    dma_controller: Rc<RefCell<DmaController>>,
+    timer_controller: Rc<RefCell<TimerController>>,
+    interrupt_controller: Rc<RefCell<InterruptController>>,
 }
 
 impl GBA {
@@ -29,41 +41,76 @@ impl GBA {
         )));
 
         let key_controller = Rc::new(RefCell::new(KeyController::new()));
+        let dma_controller = Rc::new(RefCell::new(DmaController::new()));
+        let timer_controller = Rc::new(RefCell::new(TimerController::new()));
+        let interrupt_controller = Rc::new(RefCell::new(InterruptController::new()));
 
-        let mmu = Box::new(MemoryMap {
+        let mmu = Rc::new(RefCell::new(MemoryMap {
             vram: vram.clone(),
             palette_ram: palette_ram.clone(),
             oam: oam.clone(),
             ppu: ppu.clone(),
             key_controller: key_controller.clone(),
-        });
+            dma_controller: dma_controller.clone(),
+            timer_controller: timer_controller.clone(),
+            interrupt_controller: interrupt_controller.clone(),
+        }));
 
-        // TODO: Initialize the DMA controller with the MMU Rc
-
-        let cpu = Rc::new(RefCell::new(CPU::new(mmu)));
-
-        // TODO: Initialize interrupt controller
+        let cpu = Rc::new(RefCell::new(CPU::new(mmu.clone())));
 
         Self {
             cpu,
             ppu,
             key_controller,
+            dma_controller,
+            timer_controller,
+            interrupt_controller,
         }
     }
 
     pub fn tick(&mut self) {
-        self.cpu.borrow_mut().tick();
+        if !self.dma_controller.borrow().is_active() {
+            if self.interrupt_controller.borrow().has_interrupt() {
+                // println!("Interrupt!");
+                self.cpu.borrow_mut().irq();
+            }
 
-        // if !dma_controller.is_active() {
-        //     self.cpu.tick()
-        //     if self.interrupt_controller.has_interrupt() { // IF register != 0
-        //          self.cpu.irq();
-        //     }
-        // }
-        self.ppu.borrow_mut().tick()
+            self.cpu.borrow_mut().tick();
+        }
+
+        let (vblank, hblank, vcounter) = self.ppu.borrow_mut().tick();
+        if vblank {
+            // self.interrupt_controller
+            //     .borrow_mut()
+            //     .request_reg
+            //     .set_vblank(true);
+            self.interrupt_controller
+                .borrow_mut()
+                .request(interrupt_controller::IRQ_VBLANK);
+        }
+        if hblank {
+            // self.interrupt_controller
+            //     .borrow_mut()
+            //     .request_reg
+            //     .set_hblank(true);
+            self.interrupt_controller
+                .borrow_mut()
+                .request(interrupt_controller::IRQ_HBLANK);
+        }
+        if vcounter {
+            self.interrupt_controller
+                .borrow_mut()
+                .request(interrupt_controller::IRQ_VCOUNTER);
+        }
+
         // TODO: Tick APU
-        // TODO: Tick timer unit, possibly alerting interrupt controller
-        // TODO: Tick DMA controller which should make some copies and possibly alert interrupt
+        self.timer_controller
+            .borrow_mut()
+            .tick(self.interrupt_controller.clone());
+        self.dma_controller
+            .borrow_mut()
+            .tick(self.cpu.clone(), self.interrupt_controller.clone());
+
         // TODO: When a frame is ready, the GBA should expose the framebuffer,
         // TODO: and the frontend can read it AND THEN update keypad state
     }
@@ -93,32 +140,62 @@ struct MemoryMap {
 
     ppu: Rc<RefCell<PPU>>,
     key_controller: Rc<RefCell<KeyController>>,
+    dma_controller: Rc<RefCell<DmaController>>,
+    timer_controller: Rc<RefCell<TimerController>>,
+    interrupt_controller: Rc<RefCell<InterruptController>>,
 }
 
 impl Memory for MemoryMap {
     fn peek(&self, addr: usize) -> u8 {
         match addr {
-            0x05000000..=0x050003FF => self.palette_ram.borrow().peek(addr - 0x05000000),
-            0x06000000..=0x06017FFF => self.vram.borrow().peek(addr - 0x06000000),
-            0x07000000..=0x070003FF => self.oam.borrow().peek(addr - 0x07000000),
+            0x05000000..=0x05FFFFFF => self.palette_ram.borrow().peek((addr - 0x05000000) % 0x400),
+            0x06000000..=0x06FFFFFF => self
+                .vram
+                .borrow()
+                .peek(((addr - 0x06000000) % 0x20000) % 0x18000),
+            0x07000000..=0x07FFFFFF => self.oam.borrow().peek((addr - 0x07000000) % 0x400),
 
             // IO map
             0x04000000..=0x04000057 => self.ppu.borrow().peek(addr - 0x04000000),
+            0x040000B0..=0x040000E1 => self.dma_controller.borrow().peek(addr - 0x04000000),
+            0x04000100..=0x04000111 => self.timer_controller.borrow().peek(addr - 0x04000000),
             0x04000130..=0x04000133 => self.key_controller.borrow().peek(addr - 0x04000000),
+            0x04000200..=0x0400020B => self.interrupt_controller.borrow().peek(addr - 0x04000000),
             _ => 0,
         }
     }
 
     fn write(&mut self, addr: usize, data: u8) {
         match addr {
-            0x05000000..=0x050003FF => self.palette_ram.borrow_mut().write(addr - 0x05000000, data),
-            0x06000000..=0x06017FFF => self.vram.borrow_mut().write(addr - 0x06000000, data),
-            0x07000000..=0x070003FF => self.oam.borrow_mut().write(addr - 0x07000000, data),
+            0x05000000..=0x05FFFFFF => self
+                .palette_ram
+                .borrow_mut()
+                .write((addr - 0x05000000) % 0x400, data),
+            0x06000000..=0x06FFFFFF => self
+                .vram
+                .borrow_mut()
+                .write(((addr - 0x06000000) % 0x20000) % 0x18000, data),
+            0x07000000..=0x07FFFFFF => self
+                .oam
+                .borrow_mut()
+                .write((addr - 0x07000000) % 0x400, data),
 
             // IO map
             0x04000000..=0x04000057 => self.ppu.borrow_mut().write(addr - 0x04000000, data),
+            0x040000B0..=0x040000E1 => self
+                .dma_controller
+                .borrow_mut()
+                .write(addr - 0x04000000, data),
+            0x04000100..=0x04000111 => self
+                .timer_controller
+                .borrow_mut()
+                .write(addr - 0x04000000, data),
             0x04000130..=0x04000133 => self
                 .key_controller
+                .borrow_mut()
+                .write(addr - 0x04000000, data),
+            0x04000200..=0x0400020B => self
+                .interrupt_controller
                 .borrow_mut()
                 .write(addr - 0x04000000, data),
             _ => {}

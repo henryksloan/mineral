@@ -1,6 +1,6 @@
 bitfield! {
   /// 4000000h - DISPCNT
-  /// Sets  global rules and flags for rendering
+  /// Sets global rules and flags for rendering
   pub struct LcdControlReg(u16);
   impl Debug;
   pub bg_mode, _: 2, 0; // TODO: convert into enum

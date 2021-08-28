@@ -19,6 +19,7 @@ pub struct PPU {
     scan_cycle: u32,
 
     lcd_control_reg: LcdControlReg,
+    lcd_status_reg: LcdStatusReg,
     bg_control_regs: [BgControlReg; 4],
     scroll_regs: [(ScrollReg, ScrollReg); 4],
 
@@ -41,6 +42,7 @@ impl PPU {
             scan_cycle: 0,
 
             lcd_control_reg: LcdControlReg(0),
+            lcd_status_reg: LcdStatusReg(0),
             bg_control_regs: [
                 BgControlReg(0),
                 BgControlReg(0),
@@ -59,11 +61,11 @@ impl PPU {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> (bool, bool, bool) {
         if self.scan_cycle == 0 && self.scan_line < 160 {
             self.draw_scanline();
         }
-        self.increment_scan();
+        self.increment_scan()
     }
 
     pub fn try_get_framebuffer(&mut self) -> Option<[u8; 240 * 160 * 2]> {
@@ -76,7 +78,11 @@ impl PPU {
         self.scan_line
     }
 
-    fn increment_scan(&mut self) {
+    fn increment_scan(&mut self) -> (bool, bool, bool) {
+        let mut vblank = false;
+        let mut hblank = false;
+        let mut vcounter = false;
+
         self.scan_cycle = (self.scan_cycle + 1) % 1232;
 
         if self.scan_cycle == 0 {
@@ -84,13 +90,31 @@ impl PPU {
 
             if self.scan_line == 160 {
                 self.frame_ready = true;
-                // TODO: VBlank interrupt if enabled
+                if self.lcd_status_reg.vblank_irq() {
+                    vblank = true;
+                }
             }
-
-            // TODO: V-Counter interrupt if enabled
         } else if self.scan_cycle == 960 {
-            // TODO: HBlank interrupt if enabled
+            if self.lcd_status_reg.hblank_irq() {
+                hblank = true;
+            }
         }
+
+        if self.scan_line == self.lcd_status_reg.vcounter_line() {
+            if self.lcd_status_reg.vcounter_irq() {
+                vcounter = true;
+            }
+        }
+
+        self.lcd_status_reg
+            .set_vblank((160..=226).contains(&self.scan_line));
+        // self.lcd_status_reg
+        //     .set_hblank((0..=227).contains(&self.scan_cycle));
+        self.lcd_status_reg.set_hblank(self.scan_cycle >= 960);
+        self.lcd_status_reg
+            .set_vcounter(self.scan_line == self.lcd_status_reg.vcounter_line());
+
+        (vblank, hblank, vcounter)
     }
 
     fn draw_scanline(&mut self) {
@@ -153,7 +177,7 @@ impl PPU {
                 let y = self.scan_line as usize;
                 let mut pixel_i = 480 * y;
                 let page_base = if self.lcd_control_reg.frame_select() {
-                    0x9600
+                    0xA000
                 } else {
                     0
                 };
@@ -222,9 +246,9 @@ impl PPU {
                         0x4000 * self.bg_control_regs[bg_n].char_block() as usize
                             + 64 * tile_n as usize
                             + (if flip_v { 7 - row } else { row }) * 8
-                            + (if flip_h { 3 - byte_n } else { byte_n }) * 2,
+                            + (if flip_h { 7 - byte_n } else { byte_n }),
                     );
-                    let color = self.palette_ram.borrow_mut().read_u16(data as usize);
+                    let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
                     if pixel_x_offset >= 0 && pixel_x_offset <= 239 {
                         out[2 * (pixel_x_offset as usize) + 0] = color as u8;
                         out[2 * (pixel_x_offset as usize) + 1] = (color >> 8) as u8;
@@ -270,12 +294,38 @@ impl Memory for PPU {
     fn peek(&self, addr: usize) -> u8 {
         // TODO
         match addr {
-            0x004 => {
-                (((self.scan_cycle >= 160) as u8) << 1)
-                    | (160..=226).contains(&self.scan_line) as u8
-            }
-            // TODO: 005 is vcount setting
+            0x000 => self.lcd_control_reg.lo_byte(),
+            0x001 => self.lcd_control_reg.hi_byte(),
+
+            0x004 => self.lcd_status_reg.lo_byte(),
+            0x005 => self.lcd_status_reg.hi_byte(),
             0x006 => self.scan_line,
+
+            0x008 => self.bg_control_regs[0].lo_byte(),
+            0x009 => self.bg_control_regs[0].hi_byte(),
+            0x00A => self.bg_control_regs[1].lo_byte(),
+            0x00B => self.bg_control_regs[1].hi_byte(),
+            0x00C => self.bg_control_regs[2].lo_byte(),
+            0x00D => self.bg_control_regs[2].hi_byte(),
+            0x00E => self.bg_control_regs[3].lo_byte(),
+            0x00F => self.bg_control_regs[3].hi_byte(),
+
+            0x010 => self.scroll_regs[0].0.lo_byte(),
+            0x011 => self.scroll_regs[0].0.hi_byte(),
+            0x012 => self.scroll_regs[0].1.lo_byte(),
+            0x013 => self.scroll_regs[0].1.hi_byte(),
+            0x014 => self.scroll_regs[1].0.lo_byte(),
+            0x015 => self.scroll_regs[1].0.hi_byte(),
+            0x016 => self.scroll_regs[1].1.lo_byte(),
+            0x017 => self.scroll_regs[1].1.hi_byte(),
+            0x018 => self.scroll_regs[2].0.lo_byte(),
+            0x019 => self.scroll_regs[2].0.hi_byte(),
+            0x01A => self.scroll_regs[2].1.lo_byte(),
+            0x01B => self.scroll_regs[2].1.hi_byte(),
+            0x01C => self.scroll_regs[3].0.lo_byte(),
+            0x01D => self.scroll_regs[3].0.hi_byte(),
+            0x01E => self.scroll_regs[3].1.lo_byte(),
+            0x01F => self.scroll_regs[3].1.hi_byte(),
             _ => 0,
         }
     }
@@ -285,6 +335,9 @@ impl Memory for PPU {
         match addr {
             0x000 => self.lcd_control_reg.set_lo_byte(data),
             0x001 => self.lcd_control_reg.set_hi_byte(data),
+
+            0x004 => self.lcd_status_reg.set_lo_byte(data & 0b11111000),
+            0x005 => self.lcd_status_reg.set_hi_byte(data),
 
             0x008 => self.bg_control_regs[0].set_lo_byte(data),
             0x009 => self.bg_control_regs[0].set_hi_byte(data),
@@ -303,13 +356,13 @@ impl Memory for PPU {
             0x015 => self.scroll_regs[1].0.set_hi_byte(data),
             0x016 => self.scroll_regs[1].1.set_lo_byte(data),
             0x017 => self.scroll_regs[1].1.set_hi_byte(data),
-            0x018 => self.scroll_regs[2].0.set_hi_byte(data),
+            0x018 => self.scroll_regs[2].0.set_lo_byte(data),
             0x019 => self.scroll_regs[2].0.set_hi_byte(data),
-            0x01A => self.scroll_regs[2].1.set_hi_byte(data),
+            0x01A => self.scroll_regs[2].1.set_lo_byte(data),
             0x01B => self.scroll_regs[2].1.set_hi_byte(data),
-            0x01C => self.scroll_regs[3].0.set_hi_byte(data),
+            0x01C => self.scroll_regs[3].0.set_lo_byte(data),
             0x01D => self.scroll_regs[3].0.set_hi_byte(data),
-            0x01E => self.scroll_regs[3].1.set_hi_byte(data),
+            0x01E => self.scroll_regs[3].1.set_lo_byte(data),
             0x01F => self.scroll_regs[3].1.set_hi_byte(data),
             _ => {}
         }

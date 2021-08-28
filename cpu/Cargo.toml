@@ -6,3 +6,4 @@ edition = "2018"
 
 [dependencies]
 memory = { path = "../memory" }
+sdl2 = "0.34.3"

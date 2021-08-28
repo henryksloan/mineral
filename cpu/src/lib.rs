@@ -7,7 +7,11 @@ use crate::{
     condition::Condition, instruction_type::InstructionType, operating_mode::OperatingMode,
     status_register::StatusRegister,
 };
-use memory::{Memory, RAM, ROM};
+
+use memory::Memory;
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // https://developer.arm.com/documentation/ddi0210/c/Programmer-s-Model/Exceptions/Exception-vectors
 const RESET_VEC: u32 = 0x00000000;
@@ -38,7 +42,7 @@ pub struct CPU {
     irq_register_bank: [u32; 2],
     und_register_bank: [u32; 2],
 
-    memory: Box<dyn Memory>,
+    memory: Rc<RefCell<dyn Memory>>,
     bios_rom: Vec<u8>, // Bios ROM
     ewram: Vec<u8>,    // External work RAM
     iwram: Vec<u8>,    // Internal work RAM
@@ -48,7 +52,7 @@ pub struct CPU {
 }
 
 impl CPU {
-    pub fn new(memory: Box<dyn Memory>) -> Self {
+    pub fn new(memory: Rc<RefCell<dyn Memory>>) -> Self {
         Self {
             cpsr: StatusRegister::new(),
             fiq_spsr: StatusRegister::new(),
@@ -68,7 +72,7 @@ impl CPU {
             bios_rom: vec![0; 0x4000],
             ewram: vec![0; 0x40000],
             iwram: vec![0; 0x8000],
-            cart_rom: vec![0; 0x400000],
+            cart_rom: Vec::new(),
 
             log: false,
         }
@@ -98,7 +102,11 @@ impl CPU {
             _ => Condition::from_u8(((encoding >> 28) & 0xF) as u8),
         };
 
-        if self.log {
+        // if pc >= 0x08000000 {
+        //     self.log = true;
+        // }
+
+        if self.log && !(0x0804F670..=0x0804F674).contains(&pc) && (pc / 0x100) != 0x2 {
             print!(
                 "{:08X}: {:08X} {:<19} {:?} {:08X} {:08X?}",
                 pc,
@@ -153,7 +161,7 @@ impl CPU {
     }
 
     pub fn flash_cart(&mut self, data: Vec<u8>) {
-        self.cart_rom = vec![0; 0x400000];
+        self.cart_rom = vec![0; data.len()];
         self.cart_rom[..data.len()].clone_from_slice(&data);
     }
 
@@ -250,7 +258,7 @@ impl CPU {
         };
 
         // Write results and optionally set condition flags
-        let result = product + if accumulate_flag { addend } else { 0 };
+        let result = product.wrapping_add(if accumulate_flag { addend } else { 0 });
         if long_flag {
             self.set_register(other_reg_lo_n, (result & 0xFFFFFFFF) as u32);
             self.set_register(other_reg_hi_n, ((result >> 32) & 0xFFFFFFFF) as u32);
@@ -286,9 +294,12 @@ impl CPU {
             self.write(swap_addr, (source_reg & 0xFF) as u8);
             self.set_register(dest_reg_n, old_data);
         } else {
-            let old_data = self.read_u32(swap_addr);
-            self.write_u32(swap_addr, source_reg);
-            self.set_register(dest_reg_n, old_data);
+            let mut temp = self.read_u32(swap_addr & !0b11);
+            if swap_addr & 0b11 != 0b00 {
+                temp = temp.rotate_right(8 * (swap_addr & 0b11) as u32);
+            }
+            self.write_u32(swap_addr & !0b11, source_reg);
+            self.set_register(dest_reg_n, temp);
         };
     }
 
@@ -328,12 +339,23 @@ impl CPU {
         } as usize;
 
         // TODO: Handle endianness
-        // TODO: Handle special LDR behavior on non-word-aligned addresses
         if load_flag {
             let data = match (encoding >> 5) & 0b11 {
-                0b01 => self.read_u16(transfer_addr) as u32, // Unsigned halfword
+                0b01 => {
+                    let mut val = self.read_u16(transfer_addr & !0b1) as u32; // Unsigned halfword
+                    if transfer_addr & 0b1 != 0b0 {
+                        val = val.rotate_right(8);
+                    }
+                    val
+                }
                 0b10 => ((self.read(transfer_addr) as i8) as i32) as u32, // Signed byte
-                0b11 => ((self.read_u16(transfer_addr) as i16) as i32) as u32, // Signed halfword
+                0b11 => {
+                    let mut val = (self.read_u16(transfer_addr & !0b1) as i16) as i32; // Signed halfword
+                    if transfer_addr & 0b1 != 0b0 {
+                        val = val >> 8;
+                    }
+                    val as u32
+                }
                 0b00 | _ => panic!("SWP format encountered in halfword transfer instruction"),
             };
             self.set_register(source_dest_reg_n, data);
@@ -347,7 +369,7 @@ impl CPU {
                 val
             };
             match (encoding >> 5) & 0b11 {
-                0b01 => self.write_u16(transfer_addr, (data & 0xFFFF) as u16), // Unsigned halfword
+                0b01 => self.write_u16(transfer_addr & !0b1, (data & 0xFFFF) as u16), // Unsigned halfword
                 0b10 | 0b11 => panic!("signed transfers used with store instructions"),
                 0b00 | _ => panic!("SWP format encountered in halfword transfer instruction"),
             }
@@ -356,7 +378,8 @@ impl CPU {
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if (write_back_flag || !pre_index_flag) && (source_dest_reg_n != base_reg_n) {
+        if (write_back_flag || !pre_index_flag) && (!load_flag || (source_dest_reg_n != base_reg_n))
+        {
             self.set_register(base_reg_n, offset_addr);
         }
     }
@@ -414,7 +437,7 @@ impl CPU {
             let data = {
                 let mut val = self.get_register(source_dest_reg_n);
                 if source_dest_reg_n == 15 {
-                    val = val.wrapping_add(self.mode_instr_width());
+                    val = val.wrapping_add(2 * self.mode_instr_width());
                     val &= !0b11;
                 }
                 val
@@ -422,14 +445,15 @@ impl CPU {
             if byte_flag {
                 self.write(transfer_addr, (data & 0xFF) as u8);
             } else {
-                self.write_u32(transfer_addr, data);
+                self.write_u32(transfer_addr & !0b11, data);
             }
         }
 
         // Post-indexing always writes back
         // TODO: https://iitd-plos.github.io/col718/ref/arm-instructionset.pdf Page 4-27
         // says "the W bit forces non-privileged mode for the transfer"
-        if (write_back_flag || !pre_index_flag) && (source_dest_reg_n != base_reg_n) {
+        if (write_back_flag || !pre_index_flag) && (!load_flag || (source_dest_reg_n != base_reg_n))
+        {
             self.set_register(base_reg_n, offset_addr);
         }
     }
@@ -457,7 +481,9 @@ impl CPU {
         let op1_reg = {
             let mut val = self.get_register(op1_reg_n);
             if op1_reg_n == 15 {
-                val = val.wrapping_add(self.mode_instr_width() * if imm_flag { 1 } else { 2 });
+                let shift_immediate = imm_flag || ((encoding >> 4) & 1 == 0);
+                val =
+                    val.wrapping_add(self.mode_instr_width() * if shift_immediate { 1 } else { 2 });
                 val &= !0b11;
             }
             val
@@ -471,15 +497,26 @@ impl CPU {
             self.shifted_reg_operand(encoding & 0xFFF, true)
         };
 
+        // TODO: Refactor all of this overflow and carry code. It can be done simply for all
+        // arithmetic ops.
         let result_overflowed =
             |result: u32, op2_val: u32| Some(Self::did_overflow(op1_reg, op2_val, result));
         let check_overflow = |result: u32, write_result: bool| {
             (result, result_overflowed(result, op2), write_result)
         };
-        let check_overflow_sub = |result: u32, write_result: bool| {
+        let check_overflow_sub = |result: u32, write_result: bool, reverse: bool| {
             (
                 result,
-                result_overflowed(result, (!op2).wrapping_add(1)),
+                Some(
+                    (!(if reverse { op2 } else { op1_reg }
+                        ^ if reverse { !op1_reg } else { !op2 })
+                        & (if reverse { !op1_reg } else { !op2 }
+                            ^ if reverse { op2 } else { op1_reg }
+                                .wrapping_add(if reverse { !op1_reg } else { !op2 })
+                                .wrapping_add(self.cpsr.get_c() as u32)))
+                        >> 31
+                        == 1,
+                ),
                 write_result,
             )
         };
@@ -488,8 +525,8 @@ impl CPU {
         let (result, overflow, write_result) = match opcode {
             0b0000 => (op1_reg & op2, None, true), // AND
             0b0001 => (op1_reg ^ op2, None, true), // EOR
-            0b0010 => check_overflow_sub(op1_reg.wrapping_sub(op2), true), // SUB
-            0b0011 => check_overflow_sub(op2.wrapping_sub(op1_reg), true), // RSB
+            0b0010 => check_overflow_sub(op1_reg.wrapping_sub(op2), true, false), // SUB
+            0b0011 => check_overflow_sub(op2.wrapping_sub(op1_reg), true, true), // RSB
             0b0100 => check_overflow(op1_reg.wrapping_add(op2), true), // ADD
             0b0101 => check_overflow(op1_reg.wrapping_add(op2).wrapping_add(carry), true), // ADC
             0b0110 => check_overflow_sub(
@@ -498,16 +535,18 @@ impl CPU {
                     .wrapping_add(carry)
                     .wrapping_sub(1),
                 true,
+                false,
             ), // SBC
             0b0111 => check_overflow_sub(
                 op2.wrapping_sub(op1_reg)
                     .wrapping_add(carry)
                     .wrapping_sub(1),
                 true,
+                true,
             ), // RSC
             0b1000 => (op1_reg & op2, None, false), // TST
             0b1001 => (op1_reg ^ op2, None, false), // TEQ
-            0b1010 => check_overflow_sub(op1_reg.wrapping_sub(op2), false), // CMP
+            0b1010 => check_overflow_sub(op1_reg.wrapping_sub(op2), false, true), // CMP
             0b1011 => check_overflow(op1_reg.wrapping_add(op2), false), // CMN
             0b1100 => (op1_reg | op2, None, true), // OOR
             0b1101 => (op2, None, true),           // MOV
@@ -545,7 +584,7 @@ impl CPU {
                     .checked_sub(1)
                     .is_none());
         } else if opcode == 0b0111 {
-            shifter_carry = !op2.checked_add(op1_reg).is_none()
+            shifter_carry = !(op2.checked_sub(op1_reg).is_none()
                 || op2
                     .checked_sub(op1_reg)
                     .unwrap()
@@ -557,7 +596,7 @@ impl CPU {
                     .checked_add(carry)
                     .unwrap()
                     .checked_sub(1)
-                    .is_none();
+                    .is_none());
         }
 
         if write_result {
@@ -573,7 +612,7 @@ impl CPU {
                 if let Some(spsr) = self.get_mode_spsr() {
                     self.cpsr.raw = spsr.raw;
                 } else {
-                    panic!("attempted to copy from SPSR in User or System mode");
+                    // panic!("attempted to copy from SPSR in User or System mode");
                 }
             } else {
                 if let Some(new_overflow) = overflow {
@@ -588,9 +627,14 @@ impl CPU {
 
     fn move_psr_into_reg(&mut self, use_spsr_flag: bool, dest_reg_n: usize) {
         let val = if use_spsr_flag {
-            self.get_mode_spsr()
-                .expect("attempted to get SPSR in non-privileged mode")
-                .raw
+            // self.get_mode_spsr()
+            //     .expect("attempted to get SPSR in non-privileged mode")
+            //     .raw
+            if let Some(spsr) = self.get_mode_spsr() {
+                spsr.raw
+            } else {
+                self.cpsr.raw
+            }
         } else {
             self.cpsr.raw
         };
@@ -615,11 +659,15 @@ impl CPU {
             | if flags_mask { 0xFF << 24 } else { 0 };
 
         if use_spsr_flag {
-            let spsr = self
-                .get_mode_spsr()
-                .expect("attempted to get SPSR in non-privileged mode");
-            (*spsr).raw &= !mask;
-            (*spsr).raw |= val & mask;
+            // let spsr = self
+            //     .get_mode_spsr()
+            //     .expect("attempted to get SPSR in non-privileged mode");
+            // (*spsr).raw &= !mask;
+            // (*spsr).raw |= val & mask;
+            if let Some(spsr) = self.get_mode_spsr() {
+                (*spsr).raw &= !mask;
+                (*spsr).raw |= val & mask;
+            }
         } else {
             self.cpsr.raw &= !mask;
             self.cpsr.raw |= val & mask;
@@ -633,9 +681,16 @@ impl CPU {
         let write_back_flag = (encoding >> 21) & 1 == 1;
         let load_flag = (encoding >> 20) & 1 == 1;
 
-        let reg_n_list = (0..16)
-            .filter(|i| (encoding >> i) & 1 == 1)
-            .collect::<Vec<usize>>();
+        let (reg_n_list, empty_list) = {
+            let list = (0..16)
+                .filter(|i| (encoding >> i) & 1 == 1)
+                .collect::<Vec<usize>>();
+            if list.is_empty() {
+                (vec![15], true)
+            } else {
+                (list, false)
+            }
+        };
         let pc_in_list = (encoding >> 15) & 1 == 1;
 
         let base_reg_n = ((encoding >> 16) & 0b1111) as usize;
@@ -646,6 +701,12 @@ impl CPU {
             base_reg
                 .wrapping_sub(4 * reg_n_list.len() as u32)
                 .wrapping_add(if !pre_index_flag { 4 } else { 0 })
+        };
+        let init_transfer_addr = transfer_addr;
+        let offset_addr = if up_flag {
+            base_reg.wrapping_add(4 * reg_n_list.len() as u32)
+        } else {
+            base_reg.wrapping_sub(4 * reg_n_list.len() as u32)
         };
 
         for reg_n in &reg_n_list {
@@ -667,29 +728,50 @@ impl CPU {
                         .raw;
                 }
             } else {
-                // If S flag is set and r15 is not in the list, the user bank is used
-                if psr_force_user_flag {
-                    self.write_u32(transfer_addr as usize, self.registers[*reg_n])
-                } else {
-                    self.write_u32(transfer_addr as usize, self.get_register(*reg_n))
-                }
+                let val = {
+                    let mut reg = if *reg_n == base_reg_n {
+                        if reg_n_list.first() == Some(&reg_n) {
+                            base_reg
+                        } else {
+                            if pre_index_flag {
+                                offset_addr
+                            } else {
+                                if up_flag {
+                                    offset_addr
+                                } else {
+                                    init_transfer_addr.wrapping_sub(4)
+                                }
+                            }
+                        }
+                    } else {
+                        if psr_force_user_flag {
+                            self.registers[*reg_n]
+                        } else {
+                            self.get_register(*reg_n)
+                        }
+                    };
+                    if *reg_n == 15 {
+                        reg += 2 * self.mode_instr_width();
+                    }
+                    reg
+                };
+                self.write_u32(transfer_addr as usize, val);
             }
 
             transfer_addr += 4;
         }
 
-        let base_reg_in_reg_list = (encoding >> base_reg_n) & 1 == 1;
-        if write_back_flag
-            && (!base_reg_in_reg_list
-                || reg_n_list.len() == 1
-                || reg_n_list.last() != Some(&base_reg_n))
-        {
-            let offset_addr = if up_flag {
-                base_reg.wrapping_add(4 * reg_n_list.len() as u32)
-            } else {
-                base_reg.wrapping_sub(4 * reg_n_list.len() as u32)
-            };
-            self.set_register(base_reg_n, offset_addr)
+        if empty_list {
+            self.set_register(base_reg_n, base_reg + 0x40);
+        } else {
+            let base_reg_in_reg_list = (encoding >> base_reg_n) & 1 == 1;
+            if write_back_flag
+                && (!base_reg_in_reg_list
+                    || (!load_flag
+                        && (reg_n_list.len() == 1 || reg_n_list.last() != Some(&base_reg_n))))
+            {
+                self.set_register(base_reg_n, offset_addr);
+            }
         }
     }
 
@@ -752,6 +834,19 @@ impl CPU {
         self.cpsr.set_t(false);
         self.cpsr.set_i(true);
         self.set_register(15, UND_VEC);
+    }
+
+    pub fn irq(&mut self) {
+        if self.cpsr.get_i() {
+            return;
+        }
+
+        self.irq_register_bank[1] = self.get_register(15) & !0b1;
+        self.irq_spsr.raw = self.cpsr.raw;
+        self.cpsr.set_mode(OperatingMode::Interrupt);
+        self.cpsr.set_t(false);
+        self.cpsr.set_i(true);
+        self.set_register(15, IRQ_VEC);
     }
 
     // Decodes a 12-bit operand to a register shifted by an immediate- or register-defined value
@@ -879,21 +974,39 @@ impl CPU {
 
 impl Memory for CPU {
     fn peek(&self, addr: usize) -> u8 {
+        if addr >> 8 == 0x03FFFF {
+            return self.peek(0x03007F00 | (addr & 0xFF));
+        }
+
         match addr {
             0x00000000..=0x00003FFF => self.bios_rom[addr],
-            0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000],
-            0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
-            0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000],
-            _ => self.memory.peek(addr),
+            // 0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000],
+            0x02000000..=0x02FFFFFF => self.ewram[(addr - 0x02000000) % 0x40000],
+            // 0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
+            0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000],
+            // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000],
+            // TODO: Different wait states
+            0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000],
+            0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000],
+            0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000],
+            _ => self.memory.borrow().peek(addr),
         }
     }
 
     fn write(&mut self, addr: usize, data: u8) {
+        if addr >> 8 == 0x03FFFF {
+            self.write(0x03007F00 | (addr & 0xFF), data);
+            return;
+        }
+
         match addr {
-            0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000] = data,
-            0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000] = data,
-            0x08000000..=0x0DFFFFFF => self.cart_rom[(addr - 0x08000000) % 0x400000] = data,
-            _ => self.memory.write(addr, data),
+            // 0x02000000..=0x0203FFFF => self.ewram[addr - 0x02000000] = data,
+            0x02000000..=0x02FFFFFF => self.ewram[(addr - 0x02000000) % 0x40000] = data,
+            // 0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000] = data,
+            0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000] = data,
+            // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000] = data,
+            0x08000000..=0x0DFFFFFF => {}
+            _ => self.memory.borrow_mut().write(addr, data),
         }
     }
 }
