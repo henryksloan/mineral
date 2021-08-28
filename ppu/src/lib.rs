@@ -192,7 +192,27 @@ impl PPU {
                     pixel_i += 2;
                 }
             }
-            5 => {}
+            5 => {
+                let y = self.scan_line as usize;
+                let mut pixel_i = 480 * y;
+                let page_base = if self.lcd_control_reg.frame_select() {
+                    0xA000
+                } else {
+                    0
+                };
+                for x in 0..240 {
+                    let color = if y >= 128 || x >= 160 {
+                        0
+                    } else {
+                        self.vram
+                            .borrow_mut()
+                            .read_u16(page_base + 2 * (x + 160 * y))
+                    };
+                    self.framebuffer[pixel_i + 0] = color as u8;
+                    self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
+                    pixel_i += 2;
+                }
+            }
             _ => panic!("illegal video mode"),
         }
     }
