@@ -758,7 +758,7 @@ impl CPU {
                 self.write_u32(transfer_addr as usize, val);
             }
 
-            transfer_addr += 4;
+            transfer_addr = transfer_addr.wrapping_add(4);
         }
 
         if empty_list {

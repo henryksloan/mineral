@@ -41,7 +41,7 @@ impl TimerController {
                 self.prescaler_counters[i] = self.prescaler_counters[i].wrapping_sub(1);
                 if self.prescaler_counters[i] == 0 {
                     self.reload_prescaler(i);
-                    self.counters[i] = self.counters[i].wrapping_sub(1);
+                    self.counters[i] = self.counters[i].wrapping_add(1);
                 }
             }
 
