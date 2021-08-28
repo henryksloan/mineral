@@ -94,8 +94,6 @@ impl PPU {
                     vblank = true;
                 }
             }
-
-            // TODO: V-Counter interrupt if enabled
         } else if self.scan_cycle == 960 {
             if self.lcd_status_reg.hblank_irq() {
                 hblank = true;
@@ -248,9 +246,9 @@ impl PPU {
                         0x4000 * self.bg_control_regs[bg_n].char_block() as usize
                             + 64 * tile_n as usize
                             + (if flip_v { 7 - row } else { row }) * 8
-                            + (if flip_h { 3 - byte_n } else { byte_n }) * 2,
+                            + (if flip_h { 7 - byte_n } else { byte_n }),
                     );
-                    let color = self.palette_ram.borrow_mut().read_u16(data as usize);
+                    let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
                     if pixel_x_offset >= 0 && pixel_x_offset <= 239 {
                         out[2 * (pixel_x_offset as usize) + 0] = color as u8;
                         out[2 * (pixel_x_offset as usize) + 1] = (color >> 8) as u8;

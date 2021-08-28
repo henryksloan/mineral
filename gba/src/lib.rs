@@ -153,7 +153,7 @@ impl Memory for MemoryMap {
                 .vram
                 .borrow()
                 .peek(((addr - 0x06000000) % 0x20000) % 0x18000),
-            0x07000000..=0x070003FF => self.oam.borrow().peek(addr - 0x07000000),
+            0x07000000..=0x07FFFFFF => self.oam.borrow().peek((addr - 0x07000000) % 0x400),
 
             // IO map
             0x04000000..=0x04000057 => self.ppu.borrow().peek(addr - 0x04000000),
@@ -175,7 +175,10 @@ impl Memory for MemoryMap {
                 .vram
                 .borrow_mut()
                 .write(((addr - 0x06000000) % 0x20000) % 0x18000, data),
-            0x07000000..=0x070003FF => self.oam.borrow_mut().write(addr - 0x07000000, data),
+            0x07000000..=0x07FFFFFF => self
+                .oam
+                .borrow_mut()
+                .write((addr - 0x07000000) % 0x400, data),
 
             // IO map
             0x04000000..=0x04000057 => self.ppu.borrow_mut().write(addr - 0x04000000, data),

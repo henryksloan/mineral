@@ -197,7 +197,7 @@ impl InstructionType {
             // Load/store word/byte immediate offset
             let byte = (encoding >> 12) & 1;
             let load = (encoding >> 11) & 1;
-            let offset = ((encoding >> 6) & 0b11111) << 2;
+            let offset = ((encoding >> 6) & 0b11111) << if byte == 1 { 0 } else { 2 };
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
             instr_type = Some(InstructionType::SingleTransfer);
@@ -267,7 +267,8 @@ impl InstructionType {
             let rn = (encoding >> 8) & 0b111;
             let reg_list = encoding & 0xFF;
             // Don't write back if doing a load with rn in the register list
-            let write_back = (load_flag == 0 || ((reg_list >> rn) == 0)) as u32;
+            // let write_back = (load_flag == 0 || ((reg_list >> rn) == 0)) as u32;
+            let write_back = 1;
             instr_type = Some(InstructionType::BlockTransfer);
             (0b111010001000 << 20) | (write_back << 21) | (load_flag << 20) | (rn << 16) | reg_list
         } else if hi_n(4) == 0b1101 && (encoding >> 9) & 0b111 != 0b111 {

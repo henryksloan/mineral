@@ -258,7 +258,7 @@ impl CPU {
         };
 
         // Write results and optionally set condition flags
-        let result = product + if accumulate_flag { addend } else { 0 };
+        let result = product.wrapping_add(if accumulate_flag { addend } else { 0 });
         if long_flag {
             self.set_register(other_reg_lo_n, (result & 0xFFFFFFFF) as u32);
             self.set_register(other_reg_hi_n, ((result >> 32) & 0xFFFFFFFF) as u32);
@@ -497,15 +497,26 @@ impl CPU {
             self.shifted_reg_operand(encoding & 0xFFF, true)
         };
 
+        // TODO: Refactor all of this overflow and carry code. It can be done simply for all
+        // arithmetic ops.
         let result_overflowed =
             |result: u32, op2_val: u32| Some(Self::did_overflow(op1_reg, op2_val, result));
         let check_overflow = |result: u32, write_result: bool| {
             (result, result_overflowed(result, op2), write_result)
         };
-        let check_overflow_sub = |result: u32, write_result: bool| {
+        let check_overflow_sub = |result: u32, write_result: bool, reverse: bool| {
             (
                 result,
-                result_overflowed(result, (!op2).wrapping_add(1)),
+                Some(
+                    (!(if reverse { op2 } else { op1_reg }
+                        ^ if reverse { !op1_reg } else { !op2 })
+                        & (if reverse { !op1_reg } else { !op2 }
+                            ^ if reverse { op2 } else { op1_reg }
+                                .wrapping_add(if reverse { !op1_reg } else { !op2 })
+                                .wrapping_add(self.cpsr.get_c() as u32)))
+                        >> 31
+                        == 1,
+                ),
                 write_result,
             )
         };
@@ -514,8 +525,8 @@ impl CPU {
         let (result, overflow, write_result) = match opcode {
             0b0000 => (op1_reg & op2, None, true), // AND
             0b0001 => (op1_reg ^ op2, None, true), // EOR
-            0b0010 => check_overflow_sub(op1_reg.wrapping_sub(op2), true), // SUB
-            0b0011 => check_overflow_sub(op2.wrapping_sub(op1_reg), true), // RSB
+            0b0010 => check_overflow_sub(op1_reg.wrapping_sub(op2), true, false), // SUB
+            0b0011 => check_overflow_sub(op2.wrapping_sub(op1_reg), true, true), // RSB
             0b0100 => check_overflow(op1_reg.wrapping_add(op2), true), // ADD
             0b0101 => check_overflow(op1_reg.wrapping_add(op2).wrapping_add(carry), true), // ADC
             0b0110 => check_overflow_sub(
@@ -524,16 +535,18 @@ impl CPU {
                     .wrapping_add(carry)
                     .wrapping_sub(1),
                 true,
+                false,
             ), // SBC
             0b0111 => check_overflow_sub(
                 op2.wrapping_sub(op1_reg)
                     .wrapping_add(carry)
                     .wrapping_sub(1),
                 true,
+                true,
             ), // RSC
             0b1000 => (op1_reg & op2, None, false), // TST
             0b1001 => (op1_reg ^ op2, None, false), // TEQ
-            0b1010 => check_overflow_sub(op1_reg.wrapping_sub(op2), false), // CMP
+            0b1010 => check_overflow_sub(op1_reg.wrapping_sub(op2), false, true), // CMP
             0b1011 => check_overflow(op1_reg.wrapping_add(op2), false), // CMN
             0b1100 => (op1_reg | op2, None, true), // OOR
             0b1101 => (op2, None, true),           // MOV
@@ -571,7 +584,7 @@ impl CPU {
                     .checked_sub(1)
                     .is_none());
         } else if opcode == 0b0111 {
-            shifter_carry = !op2.checked_add(op1_reg).is_none()
+            shifter_carry = !(op2.checked_sub(op1_reg).is_none()
                 || op2
                     .checked_sub(op1_reg)
                     .unwrap()
@@ -583,7 +596,7 @@ impl CPU {
                     .checked_add(carry)
                     .unwrap()
                     .checked_sub(1)
-                    .is_none();
+                    .is_none());
         }
 
         if write_result {
@@ -738,7 +751,7 @@ impl CPU {
                         }
                     };
                     if *reg_n == 15 {
-                        reg += 8;
+                        reg += 2 * self.mode_instr_width();
                     }
                     reg
                 };
@@ -972,7 +985,10 @@ impl Memory for CPU {
             // 0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000],
             0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000],
             // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000],
-            0x08000000..=0x0DFFFFFF => self.cart_rom[addr - 0x08000000],
+            // TODO: Different wait states
+            0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000],
+            0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000],
+            0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000],
             _ => self.memory.borrow().peek(addr),
         }
     }
