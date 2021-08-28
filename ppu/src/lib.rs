@@ -319,6 +319,8 @@ impl PPU {
             let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
             let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
 
+            let bytes_per_tile = if attr0.colors() { 2 } else { 1 };
+
             if !attr0.affine() && attr0.disable() {
                 continue;
             }
@@ -335,16 +337,52 @@ impl PPU {
 
             for row in 0..size.1 {
                 let y = attr0.y_coord() + 8 * row;
+                let row_start = attr2.tile()
+                    + row
+                        * if self.lcd_control_reg.obj_char_mapping() {
+                            size.0 * bytes_per_tile // 1D
+                        } else {
+                            0x20 // 2D
+                        };
 
                 for col in 0..size.0 {
+                    let tile_n = row_start + col * bytes_per_tile;
                     let x = attr1.x_coord() + 8 * col;
                     for pixel_y in 0..8 {
-                        for pixel_x in 0..8 {
-                            let pixel_i =
-                                (y as usize + pixel_y) * 480 + 2 * x as usize + 2 * pixel_x;
-                            if pixel_i < self.framebuffer.len() {
-                                self.framebuffer[pixel_i + 0] = 0xFF;
-                                self.framebuffer[pixel_i + 1] = 0x00;
+                        // TODO: Add support for 256-color mode
+                        for byte_n in 0..4 {
+                            let pixel_x_offset = x + 2 * byte_n;
+                            let data = self.vram.borrow_mut().read(
+                                0x4000 * 4
+                                    + 32 * tile_n as usize
+                                    + 4 * pixel_y as usize
+                                    + byte_n as usize,
+                            );
+                            let color_i_left = data & 0b1111;
+                            let color_left = self.palette_ram.borrow_mut().read_u16(
+                                0x200 + 2 * (attr2.palette() as usize * 16 + color_i_left as usize),
+                            );
+                            let color_i_right = (data >> 4) & 0b1111;
+                            let color_right = self.palette_ram.borrow_mut().read_u16(
+                                0x200
+                                    + 2 * (attr2.palette() as usize * 16 + color_i_right as usize),
+                            );
+                            if y as usize + pixel_y < 160 {
+                                if pixel_x_offset <= 239 && color_i_left != 0 {
+                                    self.framebuffer[(y as usize + pixel_y) * 480
+                                        + 2 * (pixel_x_offset as usize)
+                                        + 0] = color_left as u8;
+                                    self.framebuffer[(y as usize + pixel_y) * 480
+                                        + 2 * (pixel_x_offset as usize)
+                                        + 1] = (color_left >> 8) as u8;
+                                }
+                                if (pixel_x_offset + 1) <= 239 && color_i_right != 0 {
+                                    self.framebuffer[(y as usize + pixel_y) * 480
+                                        + (2 * pixel_x_offset + 2) as usize] = color_right as u8;
+                                    self.framebuffer[(y as usize + pixel_y) * 480
+                                        + (2 * pixel_x_offset + 3) as usize] =
+                                        (color_right >> 8) as u8;
+                                }
                             }
                         }
                     }
