@@ -143,25 +143,29 @@ impl PPU {
                     })
                     .collect::<Vec<((u16, usize), [u8; 480])>>();
 
-                if lines.len() == 0 {
-                    return;
-                }
-
                 lines.sort_by_key(|tuple| tuple.0);
 
                 let first_pixel_i = 480 * self.scan_line as usize;
+                let mut found_pixel = false;
                 for i in 0..240 {
                     let mut color = (0, 0);
                     for line in &lines {
                         if line.1[i * 2] != 0 || line.1[i * 2 + 1] != 0 {
                             color.0 = line.1[i * 2];
                             color.1 = line.1[i * 2 + 1];
+                            found_pixel = true;
                             break;
                         }
                     }
+
                     let pixel_i = first_pixel_i + 2 * i;
-                    self.framebuffer[pixel_i + 0] = color.0;
-                    self.framebuffer[pixel_i + 1] = color.1;
+                    if found_pixel {
+                        self.framebuffer[pixel_i + 0] = color.0;
+                        self.framebuffer[pixel_i + 1] = color.1;
+                    } else {
+                        self.framebuffer[pixel_i + 0] = 0;
+                        self.framebuffer[pixel_i + 1] = 0;
+                    }
                 }
             }
             1 => {}
@@ -338,15 +342,23 @@ impl PPU {
             for row in 0..size.1 {
                 let y = attr0.y_coord() + 8 * row;
                 let row_start = attr2.tile()
-                    + row
-                        * if self.lcd_control_reg.obj_char_mapping() {
-                            size.0 * bytes_per_tile // 1D
-                        } else {
-                            0x20 // 2D
-                        };
+                    + (if attr1.flip_v() {
+                        (size.1 - 1) - row
+                    } else {
+                        row
+                    }) * if self.lcd_control_reg.obj_char_mapping() {
+                        size.0 * bytes_per_tile // 1D
+                    } else {
+                        0x20 // 2D
+                    };
 
                 for col in 0..size.0 {
-                    let tile_n = row_start + col * bytes_per_tile;
+                    let tile_n = row_start
+                        + (if attr1.flip_h() {
+                            (size.0 - 1) - col
+                        } else {
+                            col
+                        }) * bytes_per_tile;
                     let x = attr1.x_coord() + 8 * col;
                     for pixel_y in 0..8 {
                         // TODO: Add support for 256-color mode
@@ -355,18 +367,26 @@ impl PPU {
                             let data = self.vram.borrow_mut().read(
                                 0x4000 * 4
                                     + 32 * tile_n as usize
-                                    + 4 * pixel_y as usize
-                                    + byte_n as usize,
+                                    + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 4
+                                    + (if attr1.flip_h() {
+                                        3 - byte_n as usize
+                                    } else {
+                                        byte_n as usize
+                                    }),
                             );
-                            let color_i_left = data & 0b1111;
-                            let color_left = self.palette_ram.borrow_mut().read_u16(
+                            let mut color_i_left = data & 0b1111;
+                            let mut color_left = self.palette_ram.borrow_mut().read_u16(
                                 0x200 + 2 * (attr2.palette() as usize * 16 + color_i_left as usize),
                             );
-                            let color_i_right = (data >> 4) & 0b1111;
-                            let color_right = self.palette_ram.borrow_mut().read_u16(
+                            let mut color_i_right = (data >> 4) & 0b1111;
+                            let mut color_right = self.palette_ram.borrow_mut().read_u16(
                                 0x200
                                     + 2 * (attr2.palette() as usize * 16 + color_i_right as usize),
                             );
+                            if attr1.flip_h() {
+                                std::mem::swap(&mut color_i_left, &mut color_i_right);
+                                std::mem::swap(&mut color_left, &mut color_right);
+                            }
                             if y as usize + pixel_y < 160 {
                                 if pixel_x_offset <= 239 && color_i_left != 0 {
                                     self.framebuffer[(y as usize + pixel_y) * 480
