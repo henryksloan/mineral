@@ -546,7 +546,7 @@ impl CPU {
             ), // RSC
             0b1000 => (op1_reg & op2, None, false), // TST
             0b1001 => (op1_reg ^ op2, None, false), // TEQ
-            0b1010 => check_overflow_sub(op1_reg.wrapping_sub(op2), false, true), // CMP
+            0b1010 => check_overflow_sub(op1_reg.wrapping_sub(op2), false, false), // CMP
             0b1011 => check_overflow(op1_reg.wrapping_add(op2), false), // CMN
             0b1100 => (op1_reg | op2, None, true), // OOR
             0b1101 => (op2, None, true),           // MOV

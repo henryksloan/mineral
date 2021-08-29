@@ -24,6 +24,10 @@ pub struct PPU {
     lcd_status_reg: LcdStatusReg,
     bg_control_regs: [BgControlReg; 4],
     scroll_regs: [(ScrollReg, ScrollReg); 4],
+    win0_coords: (WinCoordReg, WinCoordReg),
+    win1_coords: (WinCoordReg, WinCoordReg),
+    win_inside: WinInsideControlReg,
+    win_outside: WinOutsideControlReg,
 
     framebuffer: [u8; 240 * 160 * 2],
     frame_ready: bool,
@@ -57,6 +61,10 @@ impl PPU {
                 (ScrollReg(0), ScrollReg(0)),
                 (ScrollReg(0), ScrollReg(0)),
             ],
+            win0_coords: (WinCoordReg(0), WinCoordReg(0)),
+            win1_coords: (WinCoordReg(0), WinCoordReg(0)),
+            win_inside: WinInsideControlReg(0),
+            win_outside: WinOutsideControlReg(0),
 
             framebuffer: [0; 240 * 160 * 2],
             frame_ready: false,
@@ -276,7 +284,12 @@ impl PPU {
                             + (if flip_h { 7 - byte_n } else { byte_n }),
                     );
                     let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
-                    if pixel_x_offset >= 0 && pixel_x_offset <= 239 {
+                    let visible_with_windows = self.pixel_visible_with_windows(
+                        bg_n,
+                        pixel_x_offset as u16,
+                        self.scan_line as u16,
+                    );
+                    if visible_with_windows && pixel_x_offset >= 0 && pixel_x_offset <= 239 {
                         out[2 * (pixel_x_offset as usize) + 0] = color as u8;
                         out[2 * (pixel_x_offset as usize) + 1] = (color >> 8) as u8;
                     }
@@ -301,11 +314,21 @@ impl PPU {
                         .palette_ram
                         .borrow_mut()
                         .read_u16(2 * (palette_n as usize * 16 + color_i_right as usize));
-                    if pixel_x_offset >= 0 && pixel_x_offset <= 239 {
+                    let visible_with_windows = self.pixel_visible_with_windows(
+                        bg_n,
+                        pixel_x_offset as u16,
+                        self.scan_line as u16,
+                    );
+                    if visible_with_windows && pixel_x_offset >= 0 && pixel_x_offset <= 239 {
                         out[2 * (pixel_x_offset as usize) + 0] = color_left as u8;
                         out[2 * (pixel_x_offset as usize) + 1] = (color_left >> 8) as u8;
                     }
-                    if pixel_x_offset >= -1 && (pixel_x_offset + 1) <= 239 {
+                    let visible_with_windows = self.pixel_visible_with_windows(
+                        bg_n,
+                        (pixel_x_offset as u16).wrapping_add(1),
+                        self.scan_line as u16,
+                    );
+                    if visible_with_windows && pixel_x_offset >= -1 && (pixel_x_offset + 1) <= 239 {
                         out[(2 * pixel_x_offset + 2) as usize] = color_right as u8;
                         out[(2 * pixel_x_offset + 3) as usize] = (color_right >> 8) as u8;
                     }
@@ -314,6 +337,70 @@ impl PPU {
         }
 
         out
+    }
+
+    // Checks whether the given pixel coordinate is visible within the enabled windows.
+    // bg_n == 4 corresponds to the OBJ layer
+    fn pixel_visible_with_windows(&self, bg_n: usize, x: u16, y: u16) -> bool {
+        let enabled_windows = {
+            let mut windows = vec![];
+            if self.lcd_control_reg.enable_win0() {
+                windows.push(0);
+            }
+            if self.lcd_control_reg.enable_win1() {
+                windows.push(1);
+            }
+            windows
+        };
+
+        if enabled_windows.is_empty() {
+            return true;
+        }
+
+        let mut inside_windows = enabled_windows.into_iter().map(|window| {
+            let coords = if window == 0 {
+                &self.win0_coords
+            } else {
+                &self.win1_coords
+            };
+
+            // TODO: Properly handle off-screen values
+            let x_range = {
+                let lo = coords.0.coord_lo();
+                let mut hi = coords.0.coord_hi();
+                if hi > 240 || lo > hi {
+                    hi = 240;
+                }
+                lo..hi
+            };
+            let y_range = {
+                let lo = coords.1.coord_lo();
+                let mut hi = coords.1.coord_hi();
+                if hi > 160 || lo > hi {
+                    hi = 160;
+                }
+                lo..hi
+            };
+
+            x_range.contains(&x) && y_range.contains(&y)
+        });
+
+        let visible = match inside_windows.position(|inside| inside == true) {
+            Some(window) => {
+                // The pixel is inside some window;
+                // Check whether this BG is enabled within the highest priority window
+                let enabled_inside = (self.win_inside.0 >> (8 * window + bg_n)) & 1 == 1;
+                enabled_inside
+            }
+            None => {
+                // The pixel is outside all enabled windows;
+                // Check whether this BG is enabled in the outside window
+                let enabled_outside = (self.win_outside.0 >> bg_n) & 1 == 1;
+                enabled_outside
+            }
+        };
+
+        visible
     }
 
     fn draw_sprites(&mut self) {
@@ -388,7 +475,15 @@ impl PPU {
                                 std::mem::swap(&mut color_left, &mut color_right);
                             }
                             if y as usize + pixel_y < 160 {
-                                if pixel_x_offset <= 239 && color_i_left != 0 {
+                                let visible_with_windows = self.pixel_visible_with_windows(
+                                    4, // OBJ layer
+                                    pixel_x_offset as u16,
+                                    y + pixel_y as u16,
+                                );
+                                if visible_with_windows
+                                    && pixel_x_offset <= 239
+                                    && color_i_left != 0
+                                {
                                     self.framebuffer[(y as usize + pixel_y) * 480
                                         + 2 * (pixel_x_offset as usize)
                                         + 0] = color_left as u8;
@@ -396,7 +491,15 @@ impl PPU {
                                         + 2 * (pixel_x_offset as usize)
                                         + 1] = (color_left >> 8) as u8;
                                 }
-                                if (pixel_x_offset + 1) <= 239 && color_i_right != 0 {
+                                let visible_with_windows = self.pixel_visible_with_windows(
+                                    4, // OBJ layer
+                                    pixel_x_offset as u16 + 1,
+                                    y + pixel_y as u16,
+                                );
+                                if visible_with_windows
+                                    && (pixel_x_offset + 1) <= 239
+                                    && color_i_right != 0
+                                {
                                     self.framebuffer[(y as usize + pixel_y) * 480
                                         + (2 * pixel_x_offset + 2) as usize] = color_right as u8;
                                     self.framebuffer[(y as usize + pixel_y) * 480
@@ -448,6 +551,19 @@ impl Memory for PPU {
             0x01D => self.scroll_regs[3].0.hi_byte(),
             0x01E => self.scroll_regs[3].1.lo_byte(),
             0x01F => self.scroll_regs[3].1.hi_byte(),
+
+            0x040 => self.win0_coords.0.lo_byte(),
+            0x041 => self.win0_coords.0.hi_byte(),
+            0x042 => self.win1_coords.0.lo_byte(),
+            0x043 => self.win1_coords.0.hi_byte(),
+            0x044 => self.win0_coords.1.lo_byte(),
+            0x045 => self.win0_coords.1.hi_byte(),
+            0x046 => self.win1_coords.1.lo_byte(),
+            0x047 => self.win1_coords.1.hi_byte(),
+            0x048 => self.win_inside.lo_byte(),
+            0x049 => self.win_inside.hi_byte(),
+            0x04A => self.win_outside.lo_byte(),
+            0x04B => self.win_outside.hi_byte(),
             _ => 0,
         }
     }
@@ -486,6 +602,19 @@ impl Memory for PPU {
             0x01D => self.scroll_regs[3].0.set_hi_byte(data),
             0x01E => self.scroll_regs[3].1.set_lo_byte(data),
             0x01F => self.scroll_regs[3].1.set_hi_byte(data),
+
+            0x040 => self.win0_coords.0.set_lo_byte(data),
+            0x041 => self.win0_coords.0.set_hi_byte(data),
+            0x042 => self.win1_coords.0.set_lo_byte(data),
+            0x043 => self.win1_coords.0.set_hi_byte(data),
+            0x044 => self.win0_coords.1.set_lo_byte(data),
+            0x045 => self.win0_coords.1.set_hi_byte(data),
+            0x046 => self.win1_coords.1.set_lo_byte(data),
+            0x047 => self.win1_coords.1.set_hi_byte(data),
+            0x048 => self.win_inside.set_lo_byte(data),
+            0x049 => self.win_inside.set_hi_byte(data),
+            0x04A => self.win_outside.set_lo_byte(data),
+            0x04B => self.win_outside.set_hi_byte(data),
             _ => {}
         }
     }

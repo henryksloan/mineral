@@ -80,19 +80,21 @@ impl DmaController {
                         && !((0x040000B0..=0x040000E1).contains(&active_transfer.2))
                     {
                         if unit_size == 4 {
-                            let data = memory.read_u32(active_transfer.1);
-                            memory.write_u32(active_transfer.2, data);
+                            let data = memory.read_u32(active_transfer.1 & !0b11); // .swap_bytes();
+                            memory.write_u32(active_transfer.2 & !0b11, data);
                         } else {
-                            let data = memory.read_u16(active_transfer.1);
-                            memory.write_u16(active_transfer.2, data);
+                            let data = memory.read_u16(active_transfer.1 & !0b1); // .swap_bytes();
+                            memory.write_u16(active_transfer.2 & !0b1, data);
                         }
                     }
 
                     match active_transfer.0.dest_adjustment() {
-                        0b00 => active_transfer.2 = active_transfer.2.wrapping_add(unit_size),
+                        0b00 | 0b11 => {
+                            active_transfer.2 = active_transfer.2.wrapping_add(unit_size)
+                        }
                         0b01 => active_transfer.2 = active_transfer.2.wrapping_sub(unit_size),
-                        0b10 => {}     // Fixed
-                        0b11 | _ => {} // TODO
+                        0b10 => {} // Fixed
+                        _ => {}    // TODO
                     }
 
                     match active_transfer.0.source_adjustment() {
@@ -102,9 +104,8 @@ impl DmaController {
                         0b11 | _ => panic!("illegal DMA source adjustment mode"),
                     }
                 }
-                self.active_transfers[channel] = None;
-                self.control_regs[channel].set_enable(false);
-                if self.control_regs[channel].irq() {
+
+                if active_transfer.0.irq() {
                     let mut irq = interrupt_controller.borrow_mut();
                     match channel {
                         0 => irq.request(interrupt_controller::IRQ_DMA0),
@@ -113,6 +114,9 @@ impl DmaController {
                         3 | _ => irq.request(interrupt_controller::IRQ_DMA3),
                     }
                 }
+
+                self.active_transfers[channel] = None;
+                self.control_regs[channel].set_enable(false);
 
                 break;
             }
