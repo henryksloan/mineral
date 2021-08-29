@@ -46,6 +46,7 @@ impl Memory for InterruptController {
             0x201 => self.enable_reg.hi_byte(),
             0x202 => self.request_reg.lo_byte(),
             0x203 => self.request_reg.hi_byte(),
+            0x204 => 3,
 
             0x208 => self.master_enable_reg.byte_0(),
             0x209 => self.master_enable_reg.byte_1(),
@@ -59,8 +60,6 @@ impl Memory for InterruptController {
         match addr {
             0x200 => self.enable_reg.set_lo_byte(data),
             0x201 => self.enable_reg.set_hi_byte(data),
-            // 0x202 => self.request_reg.set_lo_byte(data),
-            // 0x203 => self.request_reg.set_hi_byte(data),
             0x202 => self
                 .request_reg
                 .set_lo_byte(self.request_reg.lo_byte() & !data),
