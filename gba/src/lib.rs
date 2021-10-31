@@ -78,26 +78,26 @@ impl GBA {
             self.cpu.borrow_mut().tick();
         }
 
-        let (vblank, hblank, vcounter) = self.ppu.borrow_mut().tick();
+        let (vblank, hblank, vblank_irq, hblank_irq, vcounter_irq) = self.ppu.borrow_mut().tick();
+
         if vblank {
-            // self.interrupt_controller
-            //     .borrow_mut()
-            //     .request_reg
-            //     .set_vblank(true);
+            self.dma_controller.borrow_mut().on_vblank();
+        }
+        if hblank {
+            self.dma_controller.borrow_mut().on_hblank();
+        }
+
+        if vblank_irq {
             self.interrupt_controller
                 .borrow_mut()
                 .request(interrupt_controller::IRQ_VBLANK);
         }
-        if hblank {
-            // self.interrupt_controller
-            //     .borrow_mut()
-            //     .request_reg
-            //     .set_hblank(true);
+        if hblank_irq {
             self.interrupt_controller
                 .borrow_mut()
                 .request(interrupt_controller::IRQ_HBLANK);
         }
-        if vcounter {
+        if vcounter_irq {
             self.interrupt_controller
                 .borrow_mut()
                 .request(interrupt_controller::IRQ_VCOUNTER);
@@ -153,10 +153,25 @@ impl Memory for MemoryMap {
                 .vram
                 .borrow()
                 .peek(((addr - 0x06000000) % 0x20000) % 0x18000),
+            // 0x06000000..=0x06FFFFFF => {
+            //     let real_addr = {
+            //         let mut temp = (addr - 0x06000000) % 0x20000;
+            //         if temp > 0x18000 {
+            //             temp -= 0x8000;
+            //         }
+            //         temp
+            //     };
+            //     self.vram.borrow().peek(real_addr)
+            // }
             0x07000000..=0x07FFFFFF => self.oam.borrow().peek((addr - 0x07000000) % 0x400),
 
             // IO map
             0x04000000..=0x04000057 => self.ppu.borrow().peek(addr - 0x04000000),
+            0x04000060..=0x040000A8 => {
+                // TODO: Sound
+                println!("R {:08X}", addr);
+                0
+            }
             0x040000B0..=0x040000E1 => self.dma_controller.borrow().peek(addr - 0x04000000),
             0x04000100..=0x04000111 => self.timer_controller.borrow().peek(addr - 0x04000000),
             0x04000130..=0x04000133 => self.key_controller.borrow().peek(addr - 0x04000000),
@@ -175,6 +190,16 @@ impl Memory for MemoryMap {
                 .vram
                 .borrow_mut()
                 .write(((addr - 0x06000000) % 0x20000) % 0x18000, data),
+            // 0x06000000..=0x06FFFFFF => {
+            //     let real_addr = {
+            //         let mut temp = (addr - 0x06000000) % 0x20000;
+            //         if temp > 0x18000 {
+            //             temp -= 0x8000;
+            //         }
+            //         temp
+            //     };
+            //     self.vram.borrow_mut().write(real_addr, data)
+            // }
             0x07000000..=0x07FFFFFF => self
                 .oam
                 .borrow_mut()
@@ -182,6 +207,10 @@ impl Memory for MemoryMap {
 
             // IO map
             0x04000000..=0x04000057 => self.ppu.borrow_mut().write(addr - 0x04000000, data),
+            0x04000060..=0x040000A8 => {
+                // TODO: Sound
+                println!("W {:08X} {:02X}", addr, data);
+            }
             0x040000B0..=0x040000E1 => self
                 .dma_controller
                 .borrow_mut()

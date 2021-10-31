@@ -43,10 +43,11 @@ pub struct CPU {
     und_register_bank: [u32; 2],
 
     memory: Rc<RefCell<dyn Memory>>,
-    bios_rom: Vec<u8>, // Bios ROM
-    ewram: Vec<u8>,    // External work RAM
-    iwram: Vec<u8>,    // Internal work RAM
-    cart_rom: Vec<u8>, // Cartridge ROM
+    bios_rom: Vec<u8>,  // Bios ROM
+    ewram: Vec<u8>,     // External work RAM
+    iwram: Vec<u8>,     // Internal work RAM
+    cart_rom: Vec<u8>,  // Cartridge ROM
+    cart_sram: Vec<u8>, // Cartridge SRAM
 
     log: bool,
 }
@@ -73,6 +74,7 @@ impl CPU {
             ewram: vec![0; 0x40000],
             iwram: vec![0; 0x8000],
             cart_rom: Vec::new(),
+            cart_sram: vec![0; 0x10000],
 
             log: false,
         }
@@ -104,6 +106,13 @@ impl CPU {
 
         // if pc >= 0x08000000 {
         //     self.log = true;
+        // }
+
+        // Temporary gba-tests-master THUMB pipeline workaround
+        // if pc == 0x08000520 {
+        //     // self.log = true;
+        //     self.set_register(15, 0x08000524 + 4);
+        //     return;
         // }
 
         if self.log && !(0x0804F670..=0x0804F674).contains(&pc) && (pc / 0x100) != 0x2 {
@@ -989,6 +998,7 @@ impl Memory for CPU {
             0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000],
             0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000],
             0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000],
+            0x0E000000..=0x0EFFFFFF => self.cart_sram[(addr - 0x0E000000) % 0x10000],
             _ => self.memory.borrow().peek(addr),
         }
     }
@@ -1006,6 +1016,7 @@ impl Memory for CPU {
             0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000] = data,
             // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000] = data,
             0x08000000..=0x0DFFFFFF => {}
+            0x0E000000..=0x0EFFFFFF => self.cart_sram[(addr - 0x0E000000) % 0x10000] = data,
             _ => self.memory.borrow_mut().write(addr, data),
         }
     }
