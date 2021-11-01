@@ -71,7 +71,8 @@ impl PPU {
         }
     }
 
-    pub fn tick(&mut self) -> (bool, bool, bool) {
+    // Returns (vblank, hblank, vblank_irq, hblank_irq, vcounter_irq)
+    pub fn tick(&mut self) -> (bool, bool, bool, bool, bool) {
         if self.scan_cycle == 0 && self.scan_line < 160 {
             self.draw_scanline();
         }
@@ -88,10 +89,12 @@ impl PPU {
         self.scan_line
     }
 
-    fn increment_scan(&mut self) -> (bool, bool, bool) {
+    fn increment_scan(&mut self) -> (bool, bool, bool, bool, bool) {
         let mut vblank = false;
         let mut hblank = false;
-        let mut vcounter = false;
+        let mut vblank_irq = false;
+        let mut hblank_irq = false;
+        let mut vcounter_irq = false;
 
         self.scan_cycle = (self.scan_cycle + 1) % 1232;
 
@@ -100,20 +103,22 @@ impl PPU {
 
             if self.scan_line == 160 {
                 self.frame_ready = true;
+                vblank = true;
                 if self.lcd_status_reg.vblank_irq() {
-                    vblank = true;
+                    vblank_irq = true;
                 }
                 self.draw_sprites();
             }
-        } else if self.scan_cycle == 960 {
+        } else if self.scan_cycle == 960 && self.scan_line < 160 {
+            hblank = true;
             if self.lcd_status_reg.hblank_irq() {
-                hblank = true;
+                hblank_irq = true;
             }
         }
 
         if self.scan_line == self.lcd_status_reg.vcounter_line() {
             if self.lcd_status_reg.vcounter_irq() {
-                vcounter = true;
+                vcounter_irq = true;
             }
         }
 
@@ -125,7 +130,7 @@ impl PPU {
         self.lcd_status_reg
             .set_vcounter(self.scan_line == self.lcd_status_reg.vcounter_line());
 
-        (vblank, hblank, vcounter)
+        (vblank, hblank, vblank_irq, hblank_irq, vcounter_irq)
     }
 
     fn draw_scanline(&mut self) {

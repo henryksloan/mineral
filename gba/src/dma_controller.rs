@@ -11,8 +11,9 @@ pub struct DmaController {
 
     control_regs: [DmaControlReg; 4],
 
+    transfers_active: [bool; 4],
     // Internal control registers and source/dest addresses of active channels
-    active_transfers: [Option<(DmaControlReg, usize, usize)>; 4],
+    transfers: [(DmaControlReg, usize, usize); 4],
 }
 
 impl DmaController {
@@ -38,14 +39,18 @@ impl DmaController {
                 DmaControlReg(0),
             ],
 
-            active_transfers: [None, None, None, None],
+            transfers_active: [false; 4],
+            transfers: [
+                (DmaControlReg(0), 0, 0),
+                (DmaControlReg(0), 0, 0),
+                (DmaControlReg(0), 0, 0),
+                (DmaControlReg(0), 0, 0),
+            ],
         }
     }
 
     pub fn is_active(&self) -> bool {
-        self.active_transfers
-            .iter()
-            .any(|transfer| transfer.is_some())
+        self.transfers_active.iter().any(|&active| active)
     }
 
     pub fn tick(
@@ -53,11 +58,11 @@ impl DmaController {
         memory_rc: Rc<RefCell<dyn Memory>>,
         interrupt_controller: Rc<RefCell<InterruptController>>,
     ) {
-        // TODO: HBlank, VBlank timing
         // TODO: Implement accurate transfer timing
         let mut memory = memory_rc.borrow_mut();
         for channel in 0..4 {
-            if let Some(active_transfer) = &mut self.active_transfers[channel] {
+            if self.transfers_active[channel] {
+                let active_transfer = &mut self.transfers[channel];
                 let mut n_units = match active_transfer.0.n_units() {
                     0 => {
                         if channel == 3 {
@@ -80,10 +85,10 @@ impl DmaController {
                         && !((0x040000B0..=0x040000E1).contains(&active_transfer.2))
                     {
                         if unit_size == 4 {
-                            let data = memory.read_u32(active_transfer.1 & !0b11); // .swap_bytes();
+                            let data = memory.read_u32(active_transfer.1 & !0b11);
                             memory.write_u32(active_transfer.2 & !0b11, data);
                         } else {
-                            let data = memory.read_u16(active_transfer.1 & !0b1); // .swap_bytes();
+                            let data = memory.read_u16(active_transfer.1 & !0b1);
                             memory.write_u16(active_transfer.2 & !0b1, data);
                         }
                     }
@@ -115,12 +120,56 @@ impl DmaController {
                     }
                 }
 
-                self.active_transfers[channel] = None;
-                self.control_regs[channel].set_enable(false);
+                self.transfers_active[channel] = false;
+                if !self.control_regs[channel].repeat() {
+                    self.control_regs[channel].set_enable(false);
+                }
 
                 break;
             }
         }
+    }
+
+    pub fn on_hblank(&mut self) {
+        for channel_n in 0..4 {
+            let enable = self.control_regs[channel_n].enable();
+            let start_timing = self.control_regs[channel_n].start_timing();
+            if enable && start_timing == 0b10 {
+                self.activate_channel(channel_n, true);
+            }
+        }
+    }
+
+    pub fn on_vblank(&mut self) {
+        for channel_n in 0..4 {
+            let enable = self.control_regs[channel_n].enable();
+            let start_timing = self.control_regs[channel_n].start_timing();
+            if enable && start_timing == 0b01 {
+                self.activate_channel(channel_n, true);
+            }
+        }
+    }
+
+    fn activate_channel(&mut self, channel_n: usize, repeat: bool) {
+        self.transfers[channel_n].0 = DmaControlReg(self.control_regs[channel_n].0);
+        if !repeat {
+            let source = if channel_n == 0 {
+                self.source_regs[channel_n].internal_addr_bits()
+            } else {
+                self.source_regs[channel_n].external_addr_bits()
+            };
+            self.transfers[channel_n].1 = source as usize;
+        }
+        if !repeat || (self.control_regs[channel_n].dest_adjustment() == 0b11) {
+            let dest = if channel_n == 3 {
+                self.dest_regs[channel_n].external_addr_bits()
+            } else {
+                self.dest_regs[channel_n].internal_addr_bits()
+            };
+            self.transfers[channel_n].2 = dest as usize;
+        }
+
+        self.transfers_active[channel_n] = true;
     }
 
     fn set_control_high_byte(&mut self, channel_n: usize, data: u8) {
@@ -128,25 +177,9 @@ impl DmaController {
         self.control_regs[channel_n].set_byte_3(data);
 
         let start_timing = self.control_regs[channel_n].start_timing();
-        if start_timing == 0 {
-            let new_enable = self.control_regs[channel_n].enable();
-            let source = if channel_n == 0 {
-                self.source_regs[channel_n].internal_addr_bits()
-            } else {
-                self.source_regs[channel_n].external_addr_bits()
-            };
-            let dest = if channel_n == 3 {
-                self.dest_regs[channel_n].external_addr_bits()
-            } else {
-                self.dest_regs[channel_n].internal_addr_bits()
-            };
-            if !old_enable && new_enable {
-                self.active_transfers[channel_n] = Some((
-                    DmaControlReg(self.control_regs[channel_n].0),
-                    source as usize,
-                    dest as usize,
-                ));
-            }
+        let new_enable = self.control_regs[channel_n].enable();
+        if start_timing == 0 && !old_enable && new_enable {
+            self.activate_channel(channel_n, false);
         }
     }
 }
@@ -263,7 +296,7 @@ bitfield! {
   /// Configures and controls a DMA channel
   pub struct DmaControlReg(u32);
   impl Debug;
-  pub n_units, _: 15, 0;
+  pub n_units, set_n_units: 15, 0;
   pub dest_adjustment, _: 22, 21;
   pub source_adjustment, _: 24, 23;
   pub repeat, _: 25;
