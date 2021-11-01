@@ -169,7 +169,6 @@ impl Memory for MemoryMap {
             0x04000000..=0x04000057 => self.ppu.borrow().peek(addr - 0x04000000),
             0x04000060..=0x040000A8 => {
                 // TODO: Sound
-                println!("R {:08X}", addr);
                 0
             }
             0x040000B0..=0x040000E1 => self.dma_controller.borrow().peek(addr - 0x04000000),
@@ -209,7 +208,6 @@ impl Memory for MemoryMap {
             0x04000000..=0x04000057 => self.ppu.borrow_mut().write(addr - 0x04000000, data),
             0x04000060..=0x040000A8 => {
                 // TODO: Sound
-                println!("W {:08X} {:02X}", addr, data);
             }
             0x040000B0..=0x040000E1 => self
                 .dma_controller
