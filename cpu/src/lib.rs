@@ -108,13 +108,6 @@ impl CPU {
         //     self.log = true;
         // }
 
-        // Temporary gba-tests-master THUMB pipeline workaround
-        // if pc == 0x08000520 {
-        //     // self.log = true;
-        //     self.set_register(15, 0x08000524 + 4);
-        //     return;
-        // }
-
         if self.log && !(0x0804F670..=0x0804F674).contains(&pc) && (pc / 0x100) != 0x2 {
             print!(
                 "{:08X}: {:08X} {:<19} {:?} {:08X} {:08X?}",

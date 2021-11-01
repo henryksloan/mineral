@@ -71,7 +71,6 @@ impl GBA {
     pub fn tick(&mut self) {
         if !self.dma_controller.borrow().is_active() {
             if self.interrupt_controller.borrow().has_interrupt() {
-                // println!("Interrupt!");
                 self.cpu.borrow_mut().irq();
             }
 
@@ -153,16 +152,6 @@ impl Memory for MemoryMap {
                 .vram
                 .borrow()
                 .peek(((addr - 0x06000000) % 0x20000) % 0x18000),
-            // 0x06000000..=0x06FFFFFF => {
-            //     let real_addr = {
-            //         let mut temp = (addr - 0x06000000) % 0x20000;
-            //         if temp > 0x18000 {
-            //             temp -= 0x8000;
-            //         }
-            //         temp
-            //     };
-            //     self.vram.borrow().peek(real_addr)
-            // }
             0x07000000..=0x07FFFFFF => self.oam.borrow().peek((addr - 0x07000000) % 0x400),
 
             // IO map
@@ -189,16 +178,6 @@ impl Memory for MemoryMap {
                 .vram
                 .borrow_mut()
                 .write(((addr - 0x06000000) % 0x20000) % 0x18000, data),
-            // 0x06000000..=0x06FFFFFF => {
-            //     let real_addr = {
-            //         let mut temp = (addr - 0x06000000) % 0x20000;
-            //         if temp > 0x18000 {
-            //             temp -= 0x8000;
-            //         }
-            //         temp
-            //     };
-            //     self.vram.borrow_mut().write(real_addr, data)
-            // }
             0x07000000..=0x07FFFFFF => self
                 .oam
                 .borrow_mut()
