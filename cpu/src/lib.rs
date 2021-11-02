@@ -991,6 +991,9 @@ impl Memory for CPU {
             0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000],
             0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000],
             0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000],
+            // Flash stub
+            0x0E000000 => 0xC2,
+            0x0E000001 => 0x09,
             0x0E000000..=0x0EFFFFFF => self.cart_sram[(addr - 0x0E000000) % 0x10000],
             _ => self.memory.borrow().peek(addr),
         }
