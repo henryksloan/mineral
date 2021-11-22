@@ -188,26 +188,18 @@ impl Memory for DmaController {
     fn peek(&self, addr: usize) -> u8 {
         match addr {
             // Channel 0
-            0x0B8 => self.control_regs[0].byte_0(),
-            0x0B9 => self.control_regs[0].byte_1(),
             0x0BA => self.control_regs[0].byte_2(),
             0x0BB => self.control_regs[0].byte_3(),
 
             // Channel 1
-            0x0C4 => self.control_regs[1].byte_0(),
-            0x0C5 => self.control_regs[1].byte_1(),
             0x0C6 => self.control_regs[1].byte_2(),
             0x0C7 => self.control_regs[1].byte_3(),
 
             // Channel 2
-            0x0D0 => self.control_regs[2].byte_0(),
-            0x0D1 => self.control_regs[2].byte_1(),
             0x0D2 => self.control_regs[2].byte_2(),
             0x0D3 => self.control_regs[2].byte_3(),
 
             // Channel 3
-            0x0DC => self.control_regs[3].byte_0(),
-            0x0DD => self.control_regs[3].byte_1(),
             0x0DE => self.control_regs[3].byte_2(),
             0x0DF => self.control_regs[3].byte_3(),
             _ => 0,

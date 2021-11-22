@@ -31,7 +31,7 @@ impl InterruptController {
     }
 
     pub fn has_interrupt(&self) -> bool {
-        self.master_enable_reg.enable() && (self.request_reg.0 & self.enable_reg.0) != 0
+        self.master_enable_reg.enable() && ((self.request_reg.0 & self.enable_reg.0) != 0)
     }
 
     pub fn request(&mut self, offset: usize) {
