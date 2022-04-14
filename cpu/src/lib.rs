@@ -104,14 +104,15 @@ impl CPU {
             _ => Condition::from_u8(((encoding >> 28) & 0xF) as u8),
         };
 
-        // if pc >= 0x08000000 {
-        //     self.log = true;
-        // }
+        if pc >= 0x08000000 {
+            // self.log = true;
+        }
         // if self.log && pc == 0 {
         //     std::process::abort();
         // }
 
-        if self.log && !(0x0804F670..=0x0804F674).contains(&pc) && (pc / 0x100) != 0x2 {
+        // if self.log && !(0x0804F670..=0x0804F674).contains(&pc) && (pc / 0x100) != 0x2 {
+        if self.log {
             print!(
                 "{:08X}: {:08X} {:<19} {:?} {:08X} {:08X?}",
                 pc,
@@ -847,7 +848,7 @@ impl CPU {
         self.und_spsr.raw = self.cpsr.raw;
         self.cpsr.set_mode(OperatingMode::Undefined);
         self.cpsr.set_t(false);
-        self.cpsr.set_i(true);
+        self.cpsr.set_i(false);
         self.set_register(15, UND_VEC);
     }
 
@@ -856,7 +857,7 @@ impl CPU {
             return;
         }
 
-        self.irq_register_bank[1] = self.get_register(15) & !0b1;
+        self.irq_register_bank[1] = (self.get_register(15) & !0b1) + 4;
         self.irq_spsr.raw = self.cpsr.raw;
         self.cpsr.set_mode(OperatingMode::Interrupt);
         self.cpsr.set_t(false);
@@ -1018,9 +1019,9 @@ impl Memory for CPU {
             0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000] = data,
             // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000] = data,
             0x08000000..=0x0DFFFFFF => {}
-            0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000] = data,
-            0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000] = data,
-            0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000] = data,
+            // 0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000] = data,
+            // 0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000] = data,
+            // 0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000] = data,
             0x0E000000..=0x0EFFFFFF => self.cart_sram[(addr - 0x0E000000) % 0x10000] = data,
             _ => self.memory.borrow_mut().write(addr, data),
         }

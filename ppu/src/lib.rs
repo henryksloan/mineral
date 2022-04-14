@@ -458,14 +458,15 @@ impl PPU {
                             let pixel_x_offset = x + 2 * byte_n;
                             // TODO: This access sometimes goes out of range if the mod is left out
                             let data = self.vram.borrow_mut().read(
-                                0x4000 * 4
+                                (0x4000 * 4
                                     + 32 * tile_n as usize
                                     + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 4
                                     + (if attr1.flip_h() {
                                         3 - byte_n as usize
                                     } else {
                                         byte_n as usize
-                                    }) % 0x18000,
+                                    }))
+                                    % 0x18000,
                             );
                             let mut color_i_left = data & 0b1111;
                             let mut color_left = self.palette_ram.borrow_mut().read_u16(
