@@ -171,13 +171,15 @@ impl PPU {
                         }
                     }
 
+                    // TODO: Investigate transparency and background color in other modes
                     let pixel_i = first_pixel_i + 2 * i;
-                    if found_pixel {
+                    if found_pixel && (color.0 != 0 || color.1 != 0) {
                         self.framebuffer[pixel_i + 0] = color.0;
                         self.framebuffer[pixel_i + 1] = color.1;
                     } else {
-                        self.framebuffer[pixel_i + 0] = 0;
-                        self.framebuffer[pixel_i + 1] = 0;
+                        let color = self.palette_ram.borrow_mut().read_u16(0);
+                        self.framebuffer[pixel_i + 0] = (color & 0xFF) as u8;
+                        self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
                     }
                 }
             }
