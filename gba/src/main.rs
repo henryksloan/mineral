@@ -26,6 +26,7 @@ fn main() {
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
         .window("Mineral", (240.0 * 3.0) as u32, (160.0 * 3.0) as u32)
+        // .window("Mineral", (240.0 * 0.5) as u32, (160.0 * 0.5) as u32)
         .position_centered()
         .build()
         .unwrap();
@@ -59,7 +60,8 @@ fn main() {
     let mut bios_file = File::open(r"gba_bios.bin").unwrap();
     bios_file.read(&mut bios).expect("buffer overflow");
 
-    let mut cart = vec![0; 0x800000 * 2];
+    // let mut cart = vec![0; 0x800000 * 2];
+    let mut cart = vec![0; 0x800000 * 0xC];
     let mut cart_file = match File::open(args[1].clone()) {
         Ok(file) => file,
         Err(e) => {

@@ -104,11 +104,15 @@ impl CPU {
             _ => Condition::from_u8(((encoding >> 28) & 0xF) as u8),
         };
 
-        // if pc >= 0x08000000 {
-        //     self.log = true;
+        if pc >= 0x08000000 {
+            // self.log = true;
+        }
+        // if self.log && pc == 0 {
+        //     std::process::abort();
         // }
 
-        if self.log && !(0x0804F670..=0x0804F674).contains(&pc) && (pc / 0x100) != 0x2 {
+        // if self.log && !(0x0804F670..=0x0804F674).contains(&pc) && (pc / 0x100) != 0x2 {
+        if self.log {
             print!(
                 "{:08X}: {:08X} {:<19} {:?} {:08X} {:08X?}",
                 pc,
@@ -163,7 +167,8 @@ impl CPU {
     }
 
     pub fn flash_cart(&mut self, data: Vec<u8>) {
-        self.cart_rom = vec![0; data.len()];
+        // self.cart_rom = vec![0; data.len()];
+        self.cart_rom = vec![0; 0x800000 * 0xC];
         self.cart_rom[..data.len()].clone_from_slice(&data);
     }
 
@@ -276,7 +281,15 @@ impl CPU {
     }
 
     fn branch_exchange(&mut self, encoding: u32) {
-        let val = self.get_register((encoding & 0b1111) as usize);
+        let val = {
+            let reg_n = (encoding & 0b1111) as usize;
+            let mut addr = self.get_register(reg_n);
+            if reg_n == 15 {
+                addr &= if self.cpsr.get_t() { !0b1 } else { !0b11 };
+                addr = addr.wrapping_add(self.mode_instr_width());
+            }
+            addr
+        };
         self.set_register(15, val);
         self.cpsr.set_t(val & 1 == 1); // Set Thumb bit based on LSB
     }
@@ -440,7 +453,9 @@ impl CPU {
                 let mut val = self.get_register(source_dest_reg_n);
                 if source_dest_reg_n == 15 {
                     val = val.wrapping_add(2 * self.mode_instr_width());
+                    // val = val.wrapping_add(self.mode_instr_width());
                     val &= !0b11;
+                    // val &= if self.cpsr.get_t() { !0b1 } else { !0b11 };
                 }
                 val
             };
@@ -483,9 +498,10 @@ impl CPU {
         let op1_reg = {
             let mut val = self.get_register(op1_reg_n);
             if op1_reg_n == 15 {
-                let shift_immediate = imm_flag || ((encoding >> 4) & 1 == 0);
-                val =
-                    val.wrapping_add(self.mode_instr_width() * if shift_immediate { 1 } else { 2 });
+                let shift_reg = ((encoding >> 4) & 1 == 1);
+                val = val.wrapping_add(
+                    self.mode_instr_width() * if !imm_flag && shift_reg { 2 } else { 1 },
+                );
                 val &= !0b11;
             }
             val
@@ -496,7 +512,13 @@ impl CPU {
         let (op2, mut shifter_carry) = if imm_flag {
             self.rotated_imm_operand(encoding & 0xFFF)
         } else {
-            self.shifted_reg_operand(encoding & 0xFFF, true)
+            let (mut a, b) = self.shifted_reg_operand(encoding & 0xFFF, true);
+            // Here's the bug that stops HMFOMT from booting!
+            // It has to do with the result of pulling from R15 while in thumb mode
+            // if encoding == 0xE1A0E00F {
+            //     a += 2;
+            // }
+            (a, b)
         };
 
         // TODO: Refactor all of this overflow and carry code. It can be done simply for all
@@ -834,7 +856,7 @@ impl CPU {
         self.und_spsr.raw = self.cpsr.raw;
         self.cpsr.set_mode(OperatingMode::Undefined);
         self.cpsr.set_t(false);
-        self.cpsr.set_i(true);
+        self.cpsr.set_i(false);
         self.set_register(15, UND_VEC);
     }
 
@@ -843,7 +865,7 @@ impl CPU {
             return;
         }
 
-        self.irq_register_bank[1] = self.get_register(15) & !0b1;
+        self.irq_register_bank[1] = (self.get_register(15) & !0b1) + 4;
         self.irq_spsr.raw = self.cpsr.raw;
         self.cpsr.set_mode(OperatingMode::Interrupt);
         self.cpsr.set_t(false);
@@ -865,15 +887,8 @@ impl CPU {
         let op2_reg = {
             let mut val = self.get_register(op2_reg_n);
             if op2_reg_n == 15 {
-                val = val.wrapping_add(
-                    self.mode_instr_width()
-                        * if !allow_shift_by_reg || !shift_by_reg {
-                            1
-                        } else {
-                            2
-                        },
-                );
-                val &= !0b11;
+                val = val.wrapping_add(self.mode_instr_width() * if shift_by_reg { 2 } else { 1 });
+                val &= if self.cpsr.get_t() { !0b1 } else { !0b11 };
             }
             val
         };
@@ -991,6 +1006,9 @@ impl Memory for CPU {
             0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000],
             0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000],
             0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000],
+            // Flash stub
+            0x0E000000 => 0xC2,
+            0x0E000001 => 0x09,
             0x0E000000..=0x0EFFFFFF => self.cart_sram[(addr - 0x0E000000) % 0x10000],
             _ => self.memory.borrow().peek(addr),
         }
@@ -1009,6 +1027,9 @@ impl Memory for CPU {
             0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000] = data,
             // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000] = data,
             0x08000000..=0x0DFFFFFF => {}
+            // 0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000] = data,
+            // 0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000] = data,
+            // 0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000] = data,
             0x0E000000..=0x0EFFFFFF => self.cart_sram[(addr - 0x0E000000) % 0x10000] = data,
             _ => self.memory.borrow_mut().write(addr, data),
         }

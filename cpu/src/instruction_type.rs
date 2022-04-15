@@ -150,12 +150,12 @@ impl InstructionType {
             // Special data processing
             let op = (encoding >> 8) & 0b11;
             let rm = (encoding >> 3) & 0b1111; // (H2 << 3) | Rm
-            let rd_rn = (((encoding >> 7) & 1) << 3) | encoding & 0b111; // (H1 << 3) | (Rd or Rn)
+            let rd_rn = (((encoding >> 7) & 1) << 3) | (encoding & 0b111); // (H1 << 3) | (Rd or Rn)
             instr_type = Some(InstructionType::DataProcessing);
             match op {
-                0b00 => (0b111000001000 << 20) | (rd_rn << 16) | (rd_rn << 12) | rm,
-                0b01 => (0b111000000101 << 20) | (rd_rn << 16) | rm,
-                0b10 | _ => (0b111000011010 << 20) | (rd_rn << 12) | rm,
+                0b00 => (0b111000001000 << 20) | (rd_rn << 16) | (rd_rn << 12) | rm, // ADD
+                0b01 => (0b111000010101 << 20) | (rd_rn << 16) | rm,                 // CMP
+                0b10 | _ => (0b111000011010 << 20) | (rd_rn << 12) | rm,             // MOV/CPY
             }
         } else if hi_n(8) == 0b01000111 {
             // Branch/exchange instruction set
