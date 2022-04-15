@@ -590,33 +590,9 @@ impl CPU {
                     .checked_add(carry)
                     .is_none();
         } else if opcode == 0b0110 {
-            shifter_carry = !(op1_reg.checked_sub(op2).is_none()
-                || op1_reg
-                    .checked_sub(op2)
-                    .unwrap()
-                    .checked_add(carry)
-                    .is_none()
-                || op1_reg
-                    .checked_sub(op2)
-                    .unwrap()
-                    .checked_add(carry)
-                    .unwrap()
-                    .checked_sub(1)
-                    .is_none());
+            shifter_carry = ((op1_reg as u64) + ((!op2) as u64) + carry as u64) > 0xFFFFFFFF;
         } else if opcode == 0b0111 {
-            shifter_carry = !(op2.checked_sub(op1_reg).is_none()
-                || op2
-                    .checked_sub(op1_reg)
-                    .unwrap()
-                    .checked_add(carry)
-                    .is_none()
-                || op2
-                    .checked_sub(op1_reg)
-                    .unwrap()
-                    .checked_add(carry)
-                    .unwrap()
-                    .checked_sub(1)
-                    .is_none());
+            shifter_carry = ((op2 as u64) + ((!op1_reg) as u64) + carry as u64) > 0xFFFFFFFF;
         }
 
         if write_result {
