@@ -70,9 +70,10 @@ impl InstructionType {
     // Returns (instruction type, translated encoding)
     pub fn from_thumb_encoding(thumb_encoding: u16) -> (Self, u32) {
         // TODO: Some of these don't update flags!
-        let mut allow_update_flags = true;
+        // let mut allow_update_flags = true;
+
         // Allows for instructions without a direct translation in ARM mode
-        let mut instr_type: Option<InstructionType> = None;
+        let instr_type: InstructionType;
 
         let encoding = thumb_encoding as u32;
         let hi_n = |n: usize| (encoding >> (16 - n)) & ((1 << n) - 1);
@@ -83,7 +84,7 @@ impl InstructionType {
             let rd = encoding & 0b111;
             let shift_type = (encoding >> 11) & 0b11;
             // MOVS <Rd>, <Rm>, <shift_type> #<immed_5>
-            instr_type = Some(InstructionType::DataProcessing);
+            instr_type = InstructionType::DataProcessing;
             (0b1110000110110000 << 16) | (rd << 12) | (immed_5 << 7) | (shift_type << 5) | rm
         } else if hi_n(6) == 0b000110 {
             // Add/subtract register
@@ -92,7 +93,7 @@ impl InstructionType {
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
             // ADDS/SUBS <Rd>, <Rn>, <Rm>
-            instr_type = Some(InstructionType::DataProcessing);
+            instr_type = InstructionType::DataProcessing;
             (0b111000000001 << 20) | (1 << (23 - op)) | (rn << 16) | (rd << 12) | rm
         } else if hi_n(6) == 0b000111 {
             // Add/subtract immediate
@@ -101,7 +102,7 @@ impl InstructionType {
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
             // ADDS/SUBS <Rd>, <Rn>, #<immed_3>
-            instr_type = Some(InstructionType::DataProcessing);
+            instr_type = InstructionType::DataProcessing;
             (0b111000100001 << 20) | (1 << (23 - op)) | (rn << 16) | (rd << 12) | immed_3
         } else if hi_n(3) == 0b001 {
             // Add/subtract/compare/move immediate
@@ -114,7 +115,7 @@ impl InstructionType {
                 0b11 | _ => (0b0010, reg, reg), // SUB
             };
             // ADDS/SUBS/MOVS/CMP <Rd>|<Rn>, #<8_bit_immed>
-            instr_type = Some(InstructionType::DataProcessing);
+            instr_type = InstructionType::DataProcessing;
             (0b111000100001 << 20) | (op << 21) | (a << 16) | (b << 12) | immed_8
         } else if hi_n(6) == 0b010000 {
             // Data-processing register
@@ -141,9 +142,9 @@ impl InstructionType {
                 0b1111 | _ => (0b0001, 0b1111, 0, rd_rn, 0, 0, rm_rs), // MVN
             };
             instr_type = if op == 0b1101 {
-                Some(InstructionType::Multiply)
+                InstructionType::Multiply
             } else {
-                Some(InstructionType::DataProcessing)
+                InstructionType::DataProcessing
             };
             (0b1110 << 28) | (a << 24) | (b << 20) | (c << 16) | (d << 12) | (e << 8) | (f << 4) | g
         } else if hi_n(6) == 0b010001 && (encoding >> 8) & 0b11 != 0b11 {
@@ -151,7 +152,7 @@ impl InstructionType {
             let op = (encoding >> 8) & 0b11;
             let rm = (encoding >> 3) & 0b1111; // (H2 << 3) | Rm
             let rd_rn = (((encoding >> 7) & 1) << 3) | (encoding & 0b111); // (H1 << 3) | (Rd or Rn)
-            instr_type = Some(InstructionType::DataProcessing);
+            instr_type = InstructionType::DataProcessing;
             match op {
                 0b00 => (0b111000001000 << 20) | (rd_rn << 16) | (rd_rn << 12) | rm, // ADD
                 0b01 => (0b111000010101 << 20) | (rd_rn << 16) | rm,                 // CMP
@@ -162,14 +163,14 @@ impl InstructionType {
             let link = (encoding >> 7) & 1;
             let reg = (encoding >> 3) & 0b1111;
             // TODO: BX behaves differently when with reg=15
-            instr_type = Some(InstructionType::BranchExchange);
+            instr_type = InstructionType::BranchExchange;
             (0b1110000100101111111111110001 << 4) | (link << 5) | reg
         } else if hi_n(5) == 0b01001 {
             // Load from literal pool
             let immed_8 = encoding & 0xFF;
             let reg = (encoding >> 8) & 0b111;
             // LDR <Rd>, [PC, #<immed_8> * 4]
-            instr_type = Some(InstructionType::SingleTransfer);
+            instr_type = InstructionType::SingleTransfer;
             (0b1110010110011111 << 16) | (reg << 12) | (immed_8 << 2)
         } else if hi_n(4) == 0b0101 {
             // Load/store register offset
@@ -188,9 +189,9 @@ impl InstructionType {
                 0b111 | _ => (0b00011001, 0b1111, true), // LDRSH
             };
             instr_type = if halfword {
-                Some(InstructionType::HalfwordTransferReg)
+                InstructionType::HalfwordTransferReg
             } else {
-                Some(InstructionType::SingleTransfer)
+                InstructionType::SingleTransfer
             };
             (0b1110 << 28) | (hi_8 << 20) | (rn << 16) | (rd << 12) | (lo_4 << 4) | rm
         } else if hi_n(3) == 0b011 {
@@ -200,7 +201,7 @@ impl InstructionType {
             let offset = ((encoding >> 6) & 0b11111) << if byte == 1 { 0 } else { 2 };
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
-            instr_type = Some(InstructionType::SingleTransfer);
+            instr_type = InstructionType::SingleTransfer;
             (0b111001011000 << 20) | (load << 20) | (byte << 22) | (rn << 16) | (rd << 12) | offset
         } else if hi_n(4) == 0b1000 {
             // Load/store halfword immediate offset
@@ -209,7 +210,7 @@ impl InstructionType {
             let immed_lo = (encoding >> 6) & 0b111;
             let rn = (encoding >> 3) & 0b111;
             let rd = encoding & 0b111;
-            instr_type = Some(InstructionType::HalfwordTransferImm);
+            instr_type = InstructionType::HalfwordTransferImm;
             (0b111000011100 << 20)
                 | (load << 20)
                 | (rn << 16)
@@ -222,14 +223,14 @@ impl InstructionType {
             let load = (encoding >> 11) & 1;
             let rd = (encoding >> 8) & 0b111;
             let immed_8 = encoding & 0xFF;
-            instr_type = Some(InstructionType::SingleTransfer);
+            instr_type = InstructionType::SingleTransfer;
             (0b1110010110001101 << 16) | (load << 20) | (rd << 12) | (immed_8 << 2)
         } else if hi_n(4) == 0b1010 {
             // Add to SP or PC
             let pc_flag = 1 - ((encoding >> 11) & 1);
             let rd = (encoding >> 8) & 0b111;
             let immed_8 = encoding & 0xFF;
-            instr_type = Some(InstructionType::DataProcessing);
+            instr_type = InstructionType::DataProcessing;
             (0b1110001010001101 << 16) | (pc_flag << 17) | (rd << 12) | (0b1111 << 8) | immed_8
         } else if hi_n(4) == 0b1011 {
             // Miscellaneous
@@ -238,7 +239,7 @@ impl InstructionType {
                 // Adjust stack pointer
                 let op = (encoding >> 7) & 1;
                 let immed_7 = encoding & 0b1111111;
-                instr_type = Some(InstructionType::DataProcessing);
+                instr_type = InstructionType::DataProcessing;
                 (0b1110001000001101110111110 << 7) | (1 << (23 - op)) | immed_7
             } else if misc_instr == 0b10 {
                 // Push/pop register list
@@ -250,7 +251,7 @@ impl InstructionType {
                 } else {
                     0b10010010
                 };
-                instr_type = Some(InstructionType::BlockTransfer);
+                instr_type = InstructionType::BlockTransfer;
                 (0b1110 << 28)
                     | (hi_8 << 20)
                     | (0b1101 << 16)
@@ -258,7 +259,7 @@ impl InstructionType {
                     | reg_list
             } else {
                 // Undefined
-                instr_type = Some(InstructionType::Undefined);
+                instr_type = InstructionType::Undefined;
                 (0b1110001 << 25) | (1 << 4)
             }
         } else if hi_n(4) == 0b1100 {
@@ -269,22 +270,22 @@ impl InstructionType {
             // Don't write back if doing a load with rn in the register list
             // let write_back = (load_flag == 0 || ((reg_list >> rn) == 0)) as u32;
             let write_back = 1;
-            instr_type = Some(InstructionType::BlockTransfer);
+            instr_type = InstructionType::BlockTransfer;
             (0b111010001000 << 20) | (write_back << 21) | (load_flag << 20) | (rn << 16) | reg_list
         } else if hi_n(4) == 0b1101 && (encoding >> 9) & 0b111 != 0b111 {
             // Conditional branch
             let cond = (encoding >> 8) & 0b1111;
             let immed_8 = encoding & 0xFF;
             let sign_ext = if (immed_8 >> 7) & 1 == 1 { 0xFFFF } else { 0 };
-            instr_type = Some(InstructionType::Branch);
+            instr_type = InstructionType::Branch;
             (cond << 28) | (0b1010 << 24) | (sign_ext << 8) | immed_8
         } else if hi_n(8) == 0b11011110 {
             // Undefined instruction
-            instr_type = Some(InstructionType::Undefined);
+            instr_type = InstructionType::Undefined;
             (0b1110001 << 25) | (1 << 4)
         } else if hi_n(8) == 0b11011111 {
             // Software interrupt
-            instr_type = Some(InstructionType::SoftwareInterrupt);
+            instr_type = InstructionType::SoftwareInterrupt;
             let immed_8 = encoding & 0xFF;
             (0b11101111 << 24) | immed_8
         } else if (hi_n(5) | 0b11) == 0b11111 {
@@ -297,32 +298,30 @@ impl InstructionType {
                     } else {
                         0
                     };
-                    instr_type = Some(InstructionType::Branch);
+                    instr_type = InstructionType::Branch;
                     (0b11101010 << 24) | (sign_ext << 11) | immed_11
                 }
                 0b01 => {
                     // Undefined
-                    instr_type = Some(InstructionType::Undefined);
+                    instr_type = InstructionType::Undefined;
                     (0b1110001 << 25) | (1 << 4)
                 }
                 0b10 => {
                     // BL prefix
-                    instr_type = Some(InstructionType::ThumbBranchPrefix);
+                    instr_type = InstructionType::ThumbBranchPrefix;
                     thumb_encoding as u32
                 }
                 0b11 | _ => {
                     // BL suffix
-                    instr_type = Some(InstructionType::ThumbBranchSuffix);
+                    instr_type = InstructionType::ThumbBranchSuffix;
                     thumb_encoding as u32
                 }
             }
         } else {
             // Undefined instruction
-            instr_type = Some(InstructionType::Undefined);
+            instr_type = InstructionType::Undefined;
             (0b1110001 << 25) | (1 << 4)
         };
-
-        let instr_type = instr_type.expect("expected thumb instruction type");
 
         (instr_type, translated)
     }

@@ -498,7 +498,7 @@ impl CPU {
         let op1_reg = {
             let mut val = self.get_register(op1_reg_n);
             if op1_reg_n == 15 {
-                let shift_reg = ((encoding >> 4) & 1 == 1);
+                let shift_reg = (encoding >> 4) & 1 == 1;
                 val = val.wrapping_add(
                     self.mode_instr_width() * if !imm_flag && shift_reg { 2 } else { 1 },
                 );
@@ -512,12 +512,8 @@ impl CPU {
         let (op2, mut shifter_carry) = if imm_flag {
             self.rotated_imm_operand(encoding & 0xFFF)
         } else {
-            let (mut a, b) = self.shifted_reg_operand(encoding & 0xFFF, true);
-            // Here's the bug that stops HMFOMT from booting!
-            // It has to do with the result of pulling from R15 while in thumb mode
-            // if encoding == 0xE1A0E00F {
-            //     a += 2;
-            // }
+            // TODO: Investigate pulling from R15 when in Thumb mode (maybe should be +2?)
+            let (a, b) = self.shifted_reg_operand(encoding & 0xFFF, true);
             (a, b)
         };
 
