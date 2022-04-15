@@ -152,6 +152,7 @@ impl DmaController {
 
     fn activate_channel(&mut self, channel_n: usize, repeat: bool) {
         self.transfers[channel_n].0 = DmaControlReg(self.control_regs[channel_n].0);
+        // TODO: When exactly should this happen? Maybe factor out to reload_addresses
         if !repeat {
             let source = if channel_n == 0 {
                 self.source_regs[channel_n].internal_addr_bits()
@@ -172,7 +173,24 @@ impl DmaController {
         self.transfers_active[channel_n] = true;
     }
 
+    fn reload_addresses(&mut self, channel_n: usize) {
+        let source = if channel_n == 0 {
+            self.source_regs[channel_n].internal_addr_bits()
+        } else {
+            self.source_regs[channel_n].external_addr_bits()
+        };
+        self.transfers[channel_n].1 = source as usize;
+        let dest = if channel_n == 3 {
+            self.dest_regs[channel_n].external_addr_bits()
+        } else {
+            self.dest_regs[channel_n].internal_addr_bits()
+        };
+        self.transfers[channel_n].2 = dest as usize;
+    }
+
     fn set_control_high_byte(&mut self, channel_n: usize, data: u8) {
+        self.reload_addresses(channel_n);
+
         let old_enable = self.control_regs[channel_n].enable();
         self.control_regs[channel_n].set_byte_3(data);
 

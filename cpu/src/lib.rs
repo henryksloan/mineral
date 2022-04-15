@@ -129,11 +129,10 @@ impl CPU {
             }
         }
 
-        if self.cpsr.get_t() {
-            self.set_register(15, self.get_register(15).wrapping_add(2));
-        } else {
-            self.set_register(15, self.get_register(15).wrapping_add(4));
-        }
+        self.set_register(
+            15,
+            self.get_register(15).wrapping_add(self.mode_instr_width()),
+        );
 
         if self.eval_condition(condition) {
             match instr_type {
