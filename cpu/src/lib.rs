@@ -281,7 +281,15 @@ impl CPU {
     }
 
     fn branch_exchange(&mut self, encoding: u32) {
-        let val = self.get_register((encoding & 0b1111) as usize);
+        let val = {
+            let reg_n = (encoding & 0b1111) as usize;
+            let mut addr = self.get_register(reg_n);
+            if reg_n == 15 {
+                addr &= if self.cpsr.get_t() { !0b1 } else { !0b11 };
+                addr = addr.wrapping_add(self.mode_instr_width());
+            }
+            addr
+        };
         self.set_register(15, val);
         self.cpsr.set_t(val & 1 == 1); // Set Thumb bit based on LSB
     }
