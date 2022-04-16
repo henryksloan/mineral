@@ -423,7 +423,16 @@ impl PPU {
     }
 
     fn draw_sprites(&mut self) {
-        for sprite_n in 0..128 {
+        let priority_order = {
+            let mut sprite_nums = (0..128).rev().collect::<Vec<_>>();
+            sprite_nums.sort_by_key(|sprite_n| {
+                let oam_addr = 8 * sprite_n;
+                let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
+                3 - attr2.priority()
+            });
+            sprite_nums
+        };
+        for sprite_n in priority_order.into_iter() {
             let oam_addr = 8 * sprite_n;
             let attr0 = ObjAttr0(self.oam.borrow_mut().read_u16(oam_addr + 0));
             let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
@@ -458,6 +467,7 @@ impl PPU {
                         0x20 // 2D
                     };
 
+                let background_color = self.palette_ram.borrow_mut().read_u16(0);
                 for col in 0..size.0 {
                     let tile_n = row_start
                         + (if attr1.flip_h() {
@@ -493,7 +503,10 @@ impl PPU {
                                         pixel_x_offset as u16,
                                         y + pixel_y as u16,
                                     );
-                                    if visible_with_windows && pixel_x_offset <= 239 && color != 0 {
+                                    if visible_with_windows
+                                        && pixel_x_offset <= 239
+                                        && color != background_color
+                                    {
                                         self.framebuffer[(y as usize + pixel_y) * 480
                                             + 2 * (pixel_x_offset as usize)
                                             + 0] = color as u8;
