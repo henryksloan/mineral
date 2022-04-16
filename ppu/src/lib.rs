@@ -154,30 +154,32 @@ impl PPU {
                             self.get_text_bg_scanline(i),
                         )
                     })
-                    .collect::<Vec<((u16, usize), [u8; 480])>>();
+                    .collect::<Vec<((u16, usize), [Option<(u8, u8)>; 240])>>();
 
                 lines.sort_by_key(|tuple| tuple.0);
 
                 let first_pixel_i = 480 * self.scan_line as usize;
-                let mut found_pixel = false;
                 for i in 0..240 {
+                    let mut found_pixel = false;
                     let mut color = (0, 0);
                     for line in &lines {
-                        if line.1[i * 2] != 0 || line.1[i * 2 + 1] != 0 {
-                            color.0 = line.1[i * 2];
-                            color.1 = line.1[i * 2 + 1];
+                        if let Some(pixel_color) = line.1[i] {
+                            color.0 = pixel_color.0;
+                            color.1 = pixel_color.1;
                             found_pixel = true;
                             break;
                         }
                     }
 
+                    // TODO: Investigate transparency and background color in other modes
                     let pixel_i = first_pixel_i + 2 * i;
                     if found_pixel {
                         self.framebuffer[pixel_i + 0] = color.0;
                         self.framebuffer[pixel_i + 1] = color.1;
                     } else {
-                        self.framebuffer[pixel_i + 0] = 0;
-                        self.framebuffer[pixel_i + 1] = 0;
+                        let color = self.palette_ram.borrow_mut().read_u16(0);
+                        self.framebuffer[pixel_i + 0] = (color & 0xFF) as u8;
+                        self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
                     }
                 }
             }
@@ -237,8 +239,8 @@ impl PPU {
         }
     }
 
-    fn get_text_bg_scanline(&self, bg_n: usize) -> [u8; 480] {
-        let mut out = [0; 480];
+    fn get_text_bg_scanline(&self, bg_n: usize) -> [Option<(u8, u8)>; 240] {
+        let mut out = [None; 240];
 
         let (n_bg_cols, n_bg_rows) = match self.bg_control_regs[bg_n].size() {
             0b00 => (32, 32),
@@ -295,8 +297,7 @@ impl PPU {
                         self.scan_line as u16,
                     );
                     if visible_with_windows && pixel_x_offset >= 0 && pixel_x_offset <= 239 {
-                        out[2 * (pixel_x_offset as usize) + 0] = color as u8;
-                        out[2 * (pixel_x_offset as usize) + 1] = (color >> 8) as u8;
+                        out[pixel_x_offset as usize] = Some((color as u8, (color >> 8) as u8));
                     }
                 }
             } else {
@@ -310,11 +311,16 @@ impl PPU {
                             + (if flip_h { 3 - byte_n } else { byte_n }),
                     );
                     let color_i_left = data & 0b1111;
+                    let color_i_right = (data >> 4) & 0b1111;
+                    let (color_i_left, color_i_right) = if flip_h {
+                        (color_i_right, color_i_left)
+                    } else {
+                        (color_i_left, color_i_right)
+                    };
                     let color_left = self
                         .palette_ram
                         .borrow_mut()
                         .read_u16(2 * (palette_n as usize * 16 + color_i_left as usize));
-                    let color_i_right = (data >> 4) & 0b1111;
                     let color_right = self
                         .palette_ram
                         .borrow_mut()
@@ -325,8 +331,10 @@ impl PPU {
                         self.scan_line as u16,
                     );
                     if visible_with_windows && pixel_x_offset >= 0 && pixel_x_offset <= 239 {
-                        out[2 * (pixel_x_offset as usize) + 0] = color_left as u8;
-                        out[2 * (pixel_x_offset as usize) + 1] = (color_left >> 8) as u8;
+                        if color_i_left != 0 {
+                            out[pixel_x_offset as usize] =
+                                Some((color_left as u8, (color_left >> 8) as u8));
+                        }
                     }
                     let visible_with_windows = self.pixel_visible_with_windows(
                         bg_n,
@@ -334,8 +342,10 @@ impl PPU {
                         self.scan_line as u16,
                     );
                     if visible_with_windows && pixel_x_offset >= -1 && (pixel_x_offset + 1) <= 239 {
-                        out[(2 * pixel_x_offset + 2) as usize] = color_right as u8;
-                        out[(2 * pixel_x_offset + 3) as usize] = (color_right >> 8) as u8;
+                        if color_i_right != 0 {
+                            out[(pixel_x_offset + 1) as usize] =
+                                Some((color_right as u8, (color_right >> 8) as u8));
+                        }
                     }
                 }
             }

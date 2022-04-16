@@ -26,7 +26,7 @@ impl Memory for KeyController {
         }
     }
 
-    fn write(&mut self, addr: usize, data: u8) {
+    fn write(&mut self, _addr: usize, _data: u8) {
         // TODO
     }
 }

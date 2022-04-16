@@ -129,11 +129,10 @@ impl CPU {
             }
         }
 
-        if self.cpsr.get_t() {
-            self.set_register(15, self.get_register(15).wrapping_add(2));
-        } else {
-            self.set_register(15, self.get_register(15).wrapping_add(4));
-        }
+        self.set_register(
+            15,
+            self.get_register(15).wrapping_add(self.mode_instr_width()),
+        );
 
         if self.eval_condition(condition) {
             match instr_type {
@@ -498,7 +497,7 @@ impl CPU {
         let op1_reg = {
             let mut val = self.get_register(op1_reg_n);
             if op1_reg_n == 15 {
-                let shift_reg = ((encoding >> 4) & 1 == 1);
+                let shift_reg = (encoding >> 4) & 1 == 1;
                 val = val.wrapping_add(
                     self.mode_instr_width() * if !imm_flag && shift_reg { 2 } else { 1 },
                 );
@@ -512,12 +511,8 @@ impl CPU {
         let (op2, mut shifter_carry) = if imm_flag {
             self.rotated_imm_operand(encoding & 0xFFF)
         } else {
-            let (mut a, b) = self.shifted_reg_operand(encoding & 0xFFF, true);
-            // Here's the bug that stops HMFOMT from booting!
-            // It has to do with the result of pulling from R15 while in thumb mode
-            // if encoding == 0xE1A0E00F {
-            //     a += 2;
-            // }
+            // TODO: Investigate pulling from R15 when in Thumb mode (maybe should be +2?)
+            let (a, b) = self.shifted_reg_operand(encoding & 0xFFF, true);
             (a, b)
         };
 
@@ -594,33 +589,9 @@ impl CPU {
                     .checked_add(carry)
                     .is_none();
         } else if opcode == 0b0110 {
-            shifter_carry = !(op1_reg.checked_sub(op2).is_none()
-                || op1_reg
-                    .checked_sub(op2)
-                    .unwrap()
-                    .checked_add(carry)
-                    .is_none()
-                || op1_reg
-                    .checked_sub(op2)
-                    .unwrap()
-                    .checked_add(carry)
-                    .unwrap()
-                    .checked_sub(1)
-                    .is_none());
+            shifter_carry = ((op1_reg as u64) + ((!op2) as u64) + carry as u64) > 0xFFFFFFFF;
         } else if opcode == 0b0111 {
-            shifter_carry = !(op2.checked_sub(op1_reg).is_none()
-                || op2
-                    .checked_sub(op1_reg)
-                    .unwrap()
-                    .checked_add(carry)
-                    .is_none()
-                || op2
-                    .checked_sub(op1_reg)
-                    .unwrap()
-                    .checked_add(carry)
-                    .unwrap()
-                    .checked_sub(1)
-                    .is_none());
+            shifter_carry = ((op2 as u64) + ((!op1_reg) as u64) + carry as u64) > 0xFFFFFFFF;
         }
 
         if write_result {
