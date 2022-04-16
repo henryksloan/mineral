@@ -107,7 +107,6 @@ impl PPU {
                 if self.lcd_status_reg.vblank_irq() {
                     vblank_irq = true;
                 }
-                self.draw_sprites();
             }
 
             if self.scan_line == self.lcd_status_reg.vcounter_line() {
@@ -180,6 +179,7 @@ impl PPU {
             .map(|i| ((self.bg_control_regs[i].priority(), i), bg_lines[i]))
             .filter_map(|(prio_i, line_opt)| line_opt.map(|line| (prio_i, line)))
             .collect::<Vec<((u16, usize), [Option<(u8, u8)>; 240])>>();
+        lines.push(((0, 0), self.get_sprite_scanline())); // TODO: Priority per pixel
         lines.sort_by_key(|tuple| tuple.0);
         let first_pixel_i = 480 * self.scan_line as usize;
         for i in 0..240 {
@@ -212,6 +212,7 @@ impl PPU {
         double_buffered: bool,
         full_palette_mode: bool,
     ) -> [Option<(u8, u8)>; 240] {
+        // TODO: Affine
         let mut out = [None; 240];
 
         let page_base = if double_buffered && self.lcd_control_reg.frame_select() {
@@ -421,7 +422,11 @@ impl PPU {
         visible
     }
 
-    fn draw_sprites(&mut self) {
+    fn get_sprite_scanline(&self) -> [Option<(u8, u8)>; 240] {
+        let mut out = [None; 240];
+
+        let y = self.scan_line as u16;
+
         let priority_order = {
             let mut sprite_nums = (0..128).rev().collect::<Vec<_>>();
             sprite_nums.sort_by_key(|sprite_n| {
@@ -453,139 +458,129 @@ impl PPU {
                 size_map[attr1.size() as usize]
             };
 
-            for row in 0..size.1 {
-                let y = attr0.y_coord() + 8 * row;
-                let row_start = attr2.tile()
-                    + (if attr1.flip_v() {
-                        (size.1 - 1) - row
-                    } else {
-                        row
-                    }) * if self.lcd_control_reg.obj_char_mapping() {
-                        size.0 * bytes_per_tile // 1D
-                    } else {
-                        0x20 // 2D
-                    };
+            let y_offset = if 255 - attr0.y_coord() < 8 * size.1 {
+                if 8 * size.1 - (255 - attr0.y_coord()) <= y {
+                    continue;
+                } else {
+                    y + (255 - attr0.y_coord())
+                }
+            } else {
+                if attr0.y_coord() > y || attr0.y_coord() + 8 * size.1 <= y {
+                    continue;
+                } else {
+                    y - attr0.y_coord()
+                }
+            };
 
-                let background_color = self.palette_ram.borrow_mut().read_u16(0);
-                for col in 0..size.0 {
-                    let tile_n = row_start
-                        + (if attr1.flip_h() {
-                            (size.0 - 1) - col
-                        } else {
-                            col
-                        }) * bytes_per_tile;
-                    let x = attr1.x_coord() + 8 * col;
-                    for pixel_y in 0..8 {
-                        let full_palette_mode = attr0.colors();
-                        if full_palette_mode {
-                            for byte_n in 0..8 {
-                                let pixel_x_offset = x + byte_n;
-                                // TODO: This access sometimes goes out of range if the mod is left out
-                                let data = self.vram.borrow_mut().read(
-                                    (0x4000 * 4
-                                        + 32 * tile_n as usize
-                                        + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 8
-                                        + (if attr1.flip_h() {
-                                            7 - byte_n as usize
-                                        } else {
-                                            byte_n as usize
-                                        }))
-                                        % 0x18000,
-                                );
-                                let color = self
-                                    .palette_ram
-                                    .borrow_mut()
-                                    .read_u16(0x200 + 2 * (data as usize));
-                                if y as usize + pixel_y < 160 {
-                                    let visible_with_windows = self.pixel_visible_with_windows(
-                                        4, // OBJ layer
-                                        pixel_x_offset as u16,
-                                        y + pixel_y as u16,
-                                    );
-                                    if visible_with_windows
-                                        && pixel_x_offset <= 239
-                                        && color != background_color
-                                    {
-                                        self.framebuffer[(y as usize + pixel_y) * 480
-                                            + 2 * (pixel_x_offset as usize)
-                                            + 0] = color as u8;
-                                        self.framebuffer[(y as usize + pixel_y) * 480
-                                            + 2 * (pixel_x_offset as usize)
-                                            + 1] = (color >> 8) as u8;
-                                    }
-                                }
+            let pixel_y = (y_offset % 8) as usize;
+            let row = y_offset / 8;
+            let row_start = attr2.tile()
+                + (if attr1.flip_v() {
+                    (size.1 - 1) - row
+                } else {
+                    row
+                }) * if self.lcd_control_reg.obj_char_mapping() {
+                    size.0 * bytes_per_tile // 1D
+                } else {
+                    0x20 // 2D
+                };
+
+            let background_color = self.palette_ram.borrow_mut().read_u16(0);
+            for col in 0..size.0 {
+                let tile_n = row_start
+                    + (if attr1.flip_h() {
+                        (size.0 - 1) - col
+                    } else {
+                        col
+                    }) * bytes_per_tile;
+                let x = attr1.x_coord() + 8 * col;
+                let full_palette_mode = attr0.colors();
+                if full_palette_mode {
+                    for byte_n in 0..8 {
+                        let pixel_x_offset = (x + byte_n) % 512;
+                        // TODO: This access sometimes goes out of range if the mod is left out
+                        let data = self.vram.borrow_mut().read(
+                            (0x4000 * 4
+                                + 32 * tile_n as usize
+                                + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 8
+                                + (if attr1.flip_h() {
+                                    7 - byte_n as usize
+                                } else {
+                                    byte_n as usize
+                                }))
+                                % 0x18000,
+                        );
+                        let color = self
+                            .palette_ram
+                            .borrow_mut()
+                            .read_u16(0x200 + 2 * (data as usize));
+                        if y as usize + pixel_y < 160 {
+                            let visible_with_windows = self.pixel_visible_with_windows(
+                                4, // OBJ layer
+                                pixel_x_offset as u16,
+                                y + pixel_y as u16,
+                            );
+                            if visible_with_windows
+                                && pixel_x_offset <= 239
+                                && color != background_color
+                            {
+                                out[pixel_x_offset as usize] =
+                                    Some((color as u8, (color >> 8) as u8));
                             }
-                        } else {
-                            for byte_n in 0..4 {
-                                let pixel_x_offset = x + 2 * byte_n;
-                                // TODO: This access sometimes goes out of range if the mod is left out
-                                let data = self.vram.borrow_mut().read(
-                                    (0x4000 * 4
-                                        + 32 * tile_n as usize
-                                        + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 4
-                                        + (if attr1.flip_h() {
-                                            3 - byte_n as usize
-                                        } else {
-                                            byte_n as usize
-                                        }))
-                                        % 0x18000,
-                                );
-                                let mut color_i_left = data & 0b1111;
-                                let mut color_left = self.palette_ram.borrow_mut().read_u16(
-                                    0x200
-                                        + 2 * (attr2.palette() as usize * 16
-                                            + color_i_left as usize),
-                                );
-                                let mut color_i_right = (data >> 4) & 0b1111;
-                                let mut color_right = self.palette_ram.borrow_mut().read_u16(
-                                    0x200
-                                        + 2 * (attr2.palette() as usize * 16
-                                            + color_i_right as usize),
-                                );
-                                if attr1.flip_h() {
-                                    std::mem::swap(&mut color_i_left, &mut color_i_right);
-                                    std::mem::swap(&mut color_left, &mut color_right);
-                                }
-                                if y as usize + pixel_y < 160 {
-                                    let visible_with_windows = self.pixel_visible_with_windows(
-                                        4, // OBJ layer
-                                        pixel_x_offset as u16,
-                                        y + pixel_y as u16,
-                                    );
-                                    if visible_with_windows
-                                        && pixel_x_offset <= 239
-                                        && color_i_left != 0
-                                    {
-                                        self.framebuffer[(y as usize + pixel_y) * 480
-                                            + 2 * (pixel_x_offset as usize)
-                                            + 0] = color_left as u8;
-                                        self.framebuffer[(y as usize + pixel_y) * 480
-                                            + 2 * (pixel_x_offset as usize)
-                                            + 1] = (color_left >> 8) as u8;
-                                    }
-                                    let visible_with_windows = self.pixel_visible_with_windows(
-                                        4, // OBJ layer
-                                        pixel_x_offset as u16 + 1,
-                                        y + pixel_y as u16,
-                                    );
-                                    if visible_with_windows
-                                        && (pixel_x_offset + 1) <= 239
-                                        && color_i_right != 0
-                                    {
-                                        self.framebuffer[(y as usize + pixel_y) * 480
-                                            + (2 * pixel_x_offset + 2) as usize] =
-                                            color_right as u8;
-                                        self.framebuffer[(y as usize + pixel_y) * 480
-                                            + (2 * pixel_x_offset + 3) as usize] =
-                                            (color_right >> 8) as u8;
-                                    }
-                                }
-                            }
+                        }
+                    }
+                } else {
+                    for byte_n in 0..4 {
+                        let pixel_x_offset = (x + 2 * byte_n) % 512;
+                        // TODO: This access sometimes goes out of range if the mod is left out
+                        let data = self.vram.borrow_mut().read(
+                            (0x4000 * 4
+                                + 32 * tile_n as usize
+                                + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 4
+                                + (if attr1.flip_h() {
+                                    3 - byte_n as usize
+                                } else {
+                                    byte_n as usize
+                                }))
+                                % 0x18000,
+                        );
+                        let mut color_i_left = data & 0b1111;
+                        let mut color_left = self.palette_ram.borrow_mut().read_u16(
+                            0x200 + 2 * (attr2.palette() as usize * 16 + color_i_left as usize),
+                        );
+                        let mut color_i_right = (data >> 4) & 0b1111;
+                        let mut color_right = self.palette_ram.borrow_mut().read_u16(
+                            0x200 + 2 * (attr2.palette() as usize * 16 + color_i_right as usize),
+                        );
+                        if attr1.flip_h() {
+                            std::mem::swap(&mut color_i_left, &mut color_i_right);
+                            std::mem::swap(&mut color_left, &mut color_right);
+                        }
+                        let visible_with_windows = self.pixel_visible_with_windows(
+                            4, // OBJ layer
+                            pixel_x_offset as u16,
+                            y + pixel_y as u16,
+                        );
+                        if visible_with_windows && pixel_x_offset <= 239 && color_i_left != 0 {
+                            out[pixel_x_offset as usize] =
+                                Some((color_left as u8, (color_left >> 8) as u8));
+                        }
+                        let visible_with_windows = self.pixel_visible_with_windows(
+                            4, // OBJ layer
+                            pixel_x_offset as u16 + 1,
+                            y + pixel_y as u16,
+                        );
+                        if visible_with_windows && (pixel_x_offset + 1) <= 239 && color_i_right != 0
+                        {
+                            out[pixel_x_offset as usize + 1] =
+                                Some((color_right as u8, (color_right >> 8) as u8));
                         }
                     }
                 }
             }
         }
+
+        out
     }
 }
 
