@@ -179,18 +179,30 @@ impl PPU {
             .map(|i| ((self.bg_control_regs[i].priority(), i), bg_lines[i]))
             .filter_map(|(prio_i, line_opt)| line_opt.map(|line| (prio_i, line)))
             .collect::<Vec<((u16, usize), [Option<(u8, u8)>; 240])>>();
-        lines.push(((0, 0), self.get_sprite_scanline())); // TODO: Priority per pixel
         lines.sort_by_key(|tuple| tuple.0);
+        let sprite_line = self.get_sprite_scanline();
+
         let first_pixel_i = 480 * self.scan_line as usize;
         for i in 0..240 {
+            // If no BG pixel is found, this value ensures a sprite pixel can be picked
+            let mut bg_prio = 4;
             let mut found_pixel = false;
             let mut color = (0, 0);
             for line in &lines {
                 if let Some(pixel_color) = line.1[i] {
                     color.0 = pixel_color.0;
                     color.1 = pixel_color.1;
+                    bg_prio = (line.0).0 as u16;
                     found_pixel = true;
                     break;
+                }
+            }
+
+            if let Some((sprite_prio, sprite_color)) = sprite_line[i] {
+                // println!("{sprite_prio} {bg_prio}");
+                if sprite_prio <= bg_prio {
+                    color = sprite_color;
+                    found_pixel = true;
                 }
             }
 
@@ -300,7 +312,11 @@ impl PPU {
                         pixel_x_offset as u16,
                         self.scan_line as u16,
                     );
-                    if visible_with_windows && pixel_x_offset >= 0 && pixel_x_offset <= 239 {
+                    if color != 0
+                        && visible_with_windows
+                        && pixel_x_offset >= 0
+                        && pixel_x_offset <= 239
+                    {
                         out[pixel_x_offset as usize] = Some((color as u8, (color >> 8) as u8));
                     }
                 }
@@ -334,7 +350,11 @@ impl PPU {
                         pixel_x_offset as u16,
                         self.scan_line as u16,
                     );
-                    if visible_with_windows && pixel_x_offset >= 0 && pixel_x_offset <= 239 {
+                    if color_i_left != 0
+                        && visible_with_windows
+                        && pixel_x_offset >= 0
+                        && pixel_x_offset <= 239
+                    {
                         if color_i_left != 0 {
                             out[pixel_x_offset as usize] =
                                 Some((color_left as u8, (color_left >> 8) as u8));
@@ -345,7 +365,11 @@ impl PPU {
                         (pixel_x_offset as u16).wrapping_add(1),
                         self.scan_line as u16,
                     );
-                    if visible_with_windows && pixel_x_offset >= -1 && (pixel_x_offset + 1) <= 239 {
+                    if color_i_right != 0
+                        && visible_with_windows
+                        && pixel_x_offset >= -1
+                        && (pixel_x_offset + 1) <= 239
+                    {
                         if color_i_right != 0 {
                             out[(pixel_x_offset + 1) as usize] =
                                 Some((color_right as u8, (color_right >> 8) as u8));
@@ -422,7 +446,7 @@ impl PPU {
         visible
     }
 
-    fn get_sprite_scanline(&self) -> [Option<(u8, u8)>; 240] {
+    fn get_sprite_scanline(&self) -> [Option<(u16, (u8, u8))>; 240] {
         let mut out = [None; 240];
 
         let y = self.scan_line as u16;
@@ -458,11 +482,11 @@ impl PPU {
                 size_map[attr1.size() as usize]
             };
 
-            let y_offset = if 255 - attr0.y_coord() < 8 * size.1 {
-                if 8 * size.1 - (255 - attr0.y_coord()) <= y {
+            let y_offset = if 256 - attr0.y_coord() < 8 * size.1 {
+                if 8 * size.1 - (256 - attr0.y_coord()) <= y {
                     continue;
                 } else {
-                    y + (255 - attr0.y_coord())
+                    y + (256 - attr0.y_coord())
                 }
             } else {
                 if attr0.y_coord() > y || attr0.y_coord() + 8 * size.1 <= y {
@@ -525,7 +549,7 @@ impl PPU {
                                 && color != background_color
                             {
                                 out[pixel_x_offset as usize] =
-                                    Some((color as u8, (color >> 8) as u8));
+                                    Some((attr2.priority(), (color as u8, (color >> 8) as u8)));
                             }
                         }
                     }
@@ -562,8 +586,10 @@ impl PPU {
                             y + pixel_y as u16,
                         );
                         if visible_with_windows && pixel_x_offset <= 239 && color_i_left != 0 {
-                            out[pixel_x_offset as usize] =
-                                Some((color_left as u8, (color_left >> 8) as u8));
+                            out[pixel_x_offset as usize] = Some((
+                                attr2.priority(),
+                                (color_left as u8, (color_left >> 8) as u8),
+                            ));
                         }
                         let visible_with_windows = self.pixel_visible_with_windows(
                             4, // OBJ layer
@@ -572,8 +598,10 @@ impl PPU {
                         );
                         if visible_with_windows && (pixel_x_offset + 1) <= 239 && color_i_right != 0
                         {
-                            out[pixel_x_offset as usize + 1] =
-                                Some((color_right as u8, (color_right >> 8) as u8));
+                            out[pixel_x_offset as usize + 1] = Some((
+                                attr2.priority(),
+                                (color_right as u8, (color_right >> 8) as u8),
+                            ));
                         }
                     }
                 }
