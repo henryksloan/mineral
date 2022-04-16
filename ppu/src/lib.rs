@@ -124,8 +124,6 @@ impl PPU {
 
         self.lcd_status_reg
             .set_vblank((160..=226).contains(&self.scan_line));
-        // self.lcd_status_reg
-        //     .set_hblank((0..=227).contains(&self.scan_cycle));
         self.lcd_status_reg.set_hblank(self.scan_cycle >= 960);
         self.lcd_status_reg
             .set_vcounter(self.scan_line == self.lcd_status_reg.vcounter_line());
@@ -134,113 +132,114 @@ impl PPU {
     }
 
     fn draw_scanline(&mut self) {
-        // TODO: Should generate a line from each active layer (backgrounds, obj),
-        // taking into account windowing, then combine them based on priority and blending
-        // TODO: Lots of this logic can be abstracted and modularized
-        match self.lcd_control_reg.bg_mode() {
-            0 => {
-                let bgs_enabled = [
-                    self.lcd_control_reg.enable_bg0(),
-                    self.lcd_control_reg.enable_bg1(),
-                    self.lcd_control_reg.enable_bg2(),
-                    self.lcd_control_reg.enable_bg3(),
-                ];
-                // Enabled scanlines tupled with the two sorting parameters (priority and bg index)
-                let mut lines = (0..4)
-                    .filter(|&i| bgs_enabled[i])
-                    .map(|i| {
-                        (
-                            (self.bg_control_regs[i].priority(), i),
-                            self.get_text_bg_scanline(i),
-                        )
-                    })
-                    .collect::<Vec<((u16, usize), [Option<(u8, u8)>; 240])>>();
+        let bgs_enabled = [
+            self.lcd_control_reg.enable_bg0(),
+            self.lcd_control_reg.enable_bg1(),
+            self.lcd_control_reg.enable_bg2(),
+            self.lcd_control_reg.enable_bg3(),
+        ];
+        let bg_lines = match self.lcd_control_reg.bg_mode() {
+            0 => [
+                Some(self.get_text_bg_scanline(0)),
+                Some(self.get_text_bg_scanline(1)),
+                Some(self.get_text_bg_scanline(2)),
+                Some(self.get_text_bg_scanline(3)),
+            ],
+            1 => [
+                Some(self.get_text_bg_scanline(0)),
+                Some(self.get_text_bg_scanline(1)),
+                None, // TODO: Affine
+                None,
+            ],
+            2 => [
+                None, None, None, // TODO: Affine
+                None, // TODO: Affine
+            ],
+            3 => [
+                None,
+                None,
+                Some(self.get_bitmap_bg_scanline(false, false, true)),
+                None,
+            ],
+            4 => [
+                None,
+                None,
+                Some(self.get_bitmap_bg_scanline(false, true, false)),
+                None,
+            ],
+            5 => [
+                None,
+                None,
+                Some(self.get_bitmap_bg_scanline(true, true, true)),
+                None,
+            ],
+            _ => panic!("illegal video mode: {}", self.lcd_control_reg.bg_mode()),
+        };
+        let mut lines = (0..4)
+            .filter(|&i| bgs_enabled[i])
+            .map(|i| ((self.bg_control_regs[i].priority(), i), bg_lines[i]))
+            .filter_map(|(prio_i, line_opt)| line_opt.map(|line| (prio_i, line)))
+            .collect::<Vec<((u16, usize), [Option<(u8, u8)>; 240])>>();
+        lines.sort_by_key(|tuple| tuple.0);
+        let first_pixel_i = 480 * self.scan_line as usize;
+        for i in 0..240 {
+            let mut found_pixel = false;
+            let mut color = (0, 0);
+            for line in &lines {
+                if let Some(pixel_color) = line.1[i] {
+                    color.0 = pixel_color.0;
+                    color.1 = pixel_color.1;
+                    found_pixel = true;
+                    break;
+                }
+            }
 
-                lines.sort_by_key(|tuple| tuple.0);
-
-                let first_pixel_i = 480 * self.scan_line as usize;
-                for i in 0..240 {
-                    let mut found_pixel = false;
-                    let mut color = (0, 0);
-                    for line in &lines {
-                        if let Some(pixel_color) = line.1[i] {
-                            color.0 = pixel_color.0;
-                            color.1 = pixel_color.1;
-                            found_pixel = true;
-                            break;
-                        }
-                    }
-
-                    // TODO: Investigate transparency and background color in other modes
-                    let pixel_i = first_pixel_i + 2 * i;
-                    if found_pixel {
-                        self.framebuffer[pixel_i + 0] = color.0;
-                        self.framebuffer[pixel_i + 1] = color.1;
-                    } else {
-                        let color = self.palette_ram.borrow_mut().read_u16(0);
-                        self.framebuffer[pixel_i + 0] = (color & 0xFF) as u8;
-                        self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
-                    }
-                }
+            let pixel_i = first_pixel_i + 2 * i;
+            if found_pixel {
+                self.framebuffer[pixel_i + 0] = color.0;
+                self.framebuffer[pixel_i + 1] = color.1;
+            } else {
+                let color = self.palette_ram.borrow_mut().read_u16(0);
+                self.framebuffer[pixel_i + 0] = (color & 0xFF) as u8;
+                self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
             }
-            1 => {
-                println!("Mode 1");
-            }
-            2 => {
-                println!("Mode 2");
-            }
-            3 => {
-                let y = self.scan_line as usize;
-                let mut pixel_i = 480 * y;
-                for x in 0..240 {
-                    let color = self.vram.borrow_mut().read_u16(2 * (x + 240 * y));
-                    self.framebuffer[pixel_i + 0] = color as u8;
-                    self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
-                    pixel_i += 2;
-                }
-            }
-            4 => {
-                let y = self.scan_line as usize;
-                let mut pixel_i = 480 * y;
-                let page_base = if self.lcd_control_reg.frame_select() {
-                    0xA000
-                } else {
-                    0
-                };
-                for x in 0..240 {
-                    let color_i = self.vram.borrow_mut().read(page_base + x + 240 * y);
-                    let color = self
-                        .palette_ram
-                        .borrow_mut()
-                        .read_u16(2 * (color_i as usize));
-                    self.framebuffer[pixel_i + 0] = color as u8;
-                    self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
-                    pixel_i += 2;
-                }
-            }
-            5 => {
-                let y = self.scan_line as usize;
-                let mut pixel_i = 480 * y;
-                let page_base = if self.lcd_control_reg.frame_select() {
-                    0xA000
-                } else {
-                    0
-                };
-                for x in 0..240 {
-                    let color = if y >= 128 || x >= 160 {
-                        0
-                    } else {
-                        self.vram
-                            .borrow_mut()
-                            .read_u16(page_base + 2 * (x + 160 * y))
-                    };
-                    self.framebuffer[pixel_i + 0] = color as u8;
-                    self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
-                    pixel_i += 2;
-                }
-            }
-            _ => panic!("illegal video mode"),
         }
+    }
+
+    fn get_bitmap_bg_scanline(
+        &self,
+        small: bool,
+        double_buffered: bool,
+        full_palette_mode: bool,
+    ) -> [Option<(u8, u8)>; 240] {
+        let mut out = [None; 240];
+
+        let page_base = if double_buffered && self.lcd_control_reg.frame_select() {
+            0xA000
+        } else {
+            0
+        };
+
+        let y = self.scan_line as usize;
+        if small && (y >= 128) {
+            return out;
+        }
+
+        let width = if small { 160 } else { 240 };
+        for x in 0..width {
+            let color = if full_palette_mode {
+                self.vram
+                    .borrow_mut()
+                    .read_u16(page_base + 2 * (x + width * y))
+            } else {
+                let color_i = self.vram.borrow_mut().read(page_base + x + width * y);
+                self.palette_ram
+                    .borrow_mut()
+                    .read_u16(2 * (color_i as usize))
+            };
+            out[x] = Some((color as u8, (color >> 8) as u8));
+        }
+        out
     }
 
     fn get_text_bg_scanline(&self, bg_n: usize) -> [Option<(u8, u8)>; 240] {
