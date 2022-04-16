@@ -311,11 +311,16 @@ impl PPU {
                             + (if flip_h { 3 - byte_n } else { byte_n }),
                     );
                     let color_i_left = data & 0b1111;
+                    let color_i_right = (data >> 4) & 0b1111;
+                    let (color_i_left, color_i_right) = if flip_h {
+                        (color_i_right, color_i_left)
+                    } else {
+                        (color_i_left, color_i_right)
+                    };
                     let color_left = self
                         .palette_ram
                         .borrow_mut()
                         .read_u16(2 * (palette_n as usize * 16 + color_i_left as usize));
-                    let color_i_right = (data >> 4) & 0b1111;
                     let color_right = self
                         .palette_ram
                         .borrow_mut()
