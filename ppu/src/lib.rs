@@ -164,12 +164,14 @@ impl PPU {
             1 => [
                 Some(self.get_text_bg_scanline(0)),
                 Some(self.get_text_bg_scanline(1)),
-                None, // TODO: Affine
+                Some(self.get_affine_text_bg_scanline(2)),
                 None,
             ],
             2 => [
-                None, None, None, // TODO: Affine
-                None, // TODO: Affine
+                None,
+                None,
+                Some(self.get_affine_text_bg_scanline(2)),
+                Some(self.get_affine_text_bg_scanline(3)),
             ],
             3 => [
                 None,
@@ -313,7 +315,6 @@ impl PPU {
             let tile_n = map_entry & 0b11_1111_1111;
             let flip_h = (map_entry >> 10) & 1 == 1;
             let flip_v = (map_entry >> 11) & 1 == 1;
-            let palette_n = (map_entry >> 12) & 0b1111;
             if full_palette_mode {
                 for byte_n in 0..8 {
                     let pixel_x_offset = ((tile_col - first_tile_col) * 8 + byte_n) as isize
@@ -339,6 +340,7 @@ impl PPU {
                     }
                 }
             } else {
+                let palette_n = (map_entry >> 12) & 0b1111;
                 for byte_n in 0..4 {
                     let pixel_x_offset = ((tile_col - first_tile_col) * 8 + 2 * byte_n) as isize
                         - (offset_x as isize) % 8;
@@ -410,6 +412,53 @@ impl PPU {
             self.bg_aff_param_regs[bg_n - 2].2.signed_value(),
             self.bg_aff_param_regs[bg_n - 2].3.signed_value(),
         );
+
+        let background_color = self.palette_ram.borrow_mut().read_u16(0);
+        let map_base = ctrl.screen_block() as usize * 0x800;
+
+        let (n_bg_cols, n_bg_rows) = match self.bg_control_regs[bg_n].size() {
+            0b00 => (16, 16),
+            0b01 => (32, 32),
+            0b10 => (64, 64),
+            0b11 | _ => (128, 128),
+        };
+
+        for ix in 0..240 {
+            let px = (ref_x + pa * ix + pb * self.scan_line as i32) >> 8;
+            let py = (ref_y + pc * ix + pd * self.scan_line as i32) >> 8;
+
+            let (tile_col, tile_row) = {
+                let mut tile_col = px / 8;
+                let mut tile_row = py / 8;
+                if ctrl.display_overflow() {
+                    tile_col = tile_col.rem_euclid(n_bg_cols as i32);
+                    tile_row = tile_row.rem_euclid(n_bg_rows as i32);
+                }
+                (tile_col as usize, tile_row as usize)
+            };
+
+            // TODO: Can we break in one of these cases?
+            if tile_col >= n_bg_cols || tile_row >= n_bg_rows {
+                continue;
+            }
+
+            let tile_n = self
+                .vram
+                .borrow_mut()
+                .read(map_base + tile_row * n_bg_cols + tile_col);
+            let data = self.vram.borrow_mut().read(
+                0x4000 * ctrl.char_block() as usize
+                    + 64 * tile_n as usize
+                    + (py as usize % 8) * 8
+                    + (ix as usize % 8),
+            );
+            let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
+            let visible_with_windows =
+                self.pixel_visible_with_windows(bg_n, ix as u16, self.scan_line as u16);
+            if color != background_color && visible_with_windows {
+                out[ix as usize] = Some((color as u8, (color >> 8) as u8));
+            }
+        }
 
         out
     }
