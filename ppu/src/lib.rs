@@ -24,6 +24,7 @@ pub struct PPU {
     lcd_status_reg: LcdStatusReg,
     bg_control_regs: [BgControlReg; 4],
     bg_ref_regs: [(BgRefReg, BgRefReg); 2],
+    bg_aff_param_regs: [(BgAffParamReg, BgAffParamReg, BgAffParamReg, BgAffParamReg); 2],
     scroll_regs: [(ScrollReg, ScrollReg); 4],
     win0_coords: (WinCoordReg, WinCoordReg),
     win1_coords: (WinCoordReg, WinCoordReg),
@@ -57,6 +58,20 @@ impl PPU {
                 BgControlReg(0),
             ],
             bg_ref_regs: [(BgRefReg(0), BgRefReg(0)), (BgRefReg(0), BgRefReg(0))],
+            bg_aff_param_regs: [
+                (
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                ),
+                (
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                ),
+            ],
             scroll_regs: [
                 (ScrollReg(0), ScrollReg(0)),
                 (ScrollReg(0), ScrollReg(0)),
@@ -388,6 +403,13 @@ impl PPU {
 
         let ref_x = self.bg_ref_regs[bg_n - 2].0.signed_value();
         let ref_y = self.bg_ref_regs[bg_n - 2].1.signed_value();
+
+        let (pa, pb, pc, pd) = (
+            self.bg_aff_param_regs[bg_n - 2].0.signed_value(),
+            self.bg_aff_param_regs[bg_n - 2].1.signed_value(),
+            self.bg_aff_param_regs[bg_n - 2].2.signed_value(),
+            self.bg_aff_param_regs[bg_n - 2].3.signed_value(),
+        );
 
         out
     }
@@ -780,6 +802,14 @@ impl Memory for PPU {
             0x01E => self.scroll_regs[3].1.lo_byte(),
             0x01F => self.scroll_regs[3].1.hi_byte(),
 
+            0x020 => self.bg_aff_param_regs[0].0.lo_byte(),
+            0x021 => self.bg_aff_param_regs[0].0.hi_byte(),
+            0x022 => self.bg_aff_param_regs[0].1.lo_byte(),
+            0x023 => self.bg_aff_param_regs[0].1.hi_byte(),
+            0x024 => self.bg_aff_param_regs[0].2.lo_byte(),
+            0x025 => self.bg_aff_param_regs[0].2.hi_byte(),
+            0x026 => self.bg_aff_param_regs[0].3.lo_byte(),
+            0x027 => self.bg_aff_param_regs[0].3.hi_byte(),
             0x028 => self.bg_ref_regs[0].0.byte_0(),
             0x029 => self.bg_ref_regs[0].0.byte_1(),
             0x02A => self.bg_ref_regs[0].0.byte_2(),
@@ -788,6 +818,14 @@ impl Memory for PPU {
             0x02D => self.bg_ref_regs[0].1.byte_1(),
             0x02E => self.bg_ref_regs[0].1.byte_2(),
             0x02F => self.bg_ref_regs[0].1.byte_3(),
+            0x030 => self.bg_aff_param_regs[1].0.lo_byte(),
+            0x031 => self.bg_aff_param_regs[1].0.hi_byte(),
+            0x032 => self.bg_aff_param_regs[1].1.lo_byte(),
+            0x033 => self.bg_aff_param_regs[1].1.hi_byte(),
+            0x034 => self.bg_aff_param_regs[1].2.lo_byte(),
+            0x035 => self.bg_aff_param_regs[1].2.hi_byte(),
+            0x036 => self.bg_aff_param_regs[1].3.lo_byte(),
+            0x037 => self.bg_aff_param_regs[1].3.hi_byte(),
             0x038 => self.bg_ref_regs[1].0.byte_0(),
             0x039 => self.bg_ref_regs[1].0.byte_1(),
             0x03A => self.bg_ref_regs[1].0.byte_2(),
@@ -847,6 +885,14 @@ impl Memory for PPU {
             0x01E => self.scroll_regs[3].1.set_lo_byte(data),
             0x01F => self.scroll_regs[3].1.set_hi_byte(data),
 
+            0x020 => self.bg_aff_param_regs[0].0.set_lo_byte(data),
+            0x021 => self.bg_aff_param_regs[0].0.set_hi_byte(data),
+            0x022 => self.bg_aff_param_regs[0].1.set_lo_byte(data),
+            0x023 => self.bg_aff_param_regs[0].1.set_hi_byte(data),
+            0x024 => self.bg_aff_param_regs[0].2.set_lo_byte(data),
+            0x025 => self.bg_aff_param_regs[0].2.set_hi_byte(data),
+            0x026 => self.bg_aff_param_regs[0].3.set_lo_byte(data),
+            0x027 => self.bg_aff_param_regs[0].3.set_hi_byte(data),
             0x028 => self.bg_ref_regs[0].0.set_byte_0(data),
             0x029 => self.bg_ref_regs[0].0.set_byte_1(data),
             0x02A => self.bg_ref_regs[0].0.set_byte_2(data),
@@ -855,6 +901,14 @@ impl Memory for PPU {
             0x02D => self.bg_ref_regs[0].1.set_byte_1(data),
             0x02E => self.bg_ref_regs[0].1.set_byte_2(data),
             0x02F => self.bg_ref_regs[0].1.set_byte_3(data),
+            0x030 => self.bg_aff_param_regs[1].0.set_lo_byte(data),
+            0x031 => self.bg_aff_param_regs[1].0.set_hi_byte(data),
+            0x032 => self.bg_aff_param_regs[1].1.set_lo_byte(data),
+            0x033 => self.bg_aff_param_regs[1].1.set_hi_byte(data),
+            0x034 => self.bg_aff_param_regs[1].2.set_lo_byte(data),
+            0x035 => self.bg_aff_param_regs[1].2.set_hi_byte(data),
+            0x036 => self.bg_aff_param_regs[1].3.set_lo_byte(data),
+            0x037 => self.bg_aff_param_regs[1].3.set_hi_byte(data),
             0x038 => self.bg_ref_regs[1].0.set_byte_0(data),
             0x039 => self.bg_ref_regs[1].0.set_byte_1(data),
             0x03A => self.bg_ref_regs[1].0.set_byte_2(data),
