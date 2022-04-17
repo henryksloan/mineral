@@ -73,8 +73,8 @@ fn main() {
         Scancode::Right,
         Scancode::Return,
         Scancode::RShift,
-        Scancode::X,
         Scancode::Z,
+        Scancode::X,
     ];
 
     let mut now = time::Instant::now();

@@ -23,6 +23,8 @@ pub struct PPU {
     lcd_control_reg: LcdControlReg,
     lcd_status_reg: LcdStatusReg,
     bg_control_regs: [BgControlReg; 4],
+    bg_ref_regs: [(BgRefReg, BgRefReg); 2],
+    bg_aff_param_regs: [(BgAffParamReg, BgAffParamReg, BgAffParamReg, BgAffParamReg); 2],
     scroll_regs: [(ScrollReg, ScrollReg); 4],
     win0_coords: (WinCoordReg, WinCoordReg),
     win1_coords: (WinCoordReg, WinCoordReg),
@@ -54,6 +56,21 @@ impl PPU {
                 BgControlReg(0),
                 BgControlReg(0),
                 BgControlReg(0),
+            ],
+            bg_ref_regs: [(BgRefReg(0), BgRefReg(0)), (BgRefReg(0), BgRefReg(0))],
+            bg_aff_param_regs: [
+                (
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                ),
+                (
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                    BgAffParamReg(0),
+                ),
             ],
             scroll_regs: [
                 (ScrollReg(0), ScrollReg(0)),
@@ -147,12 +164,14 @@ impl PPU {
             1 => [
                 Some(self.get_text_bg_scanline(0)),
                 Some(self.get_text_bg_scanline(1)),
-                None, // TODO: Affine
+                Some(self.get_affine_text_bg_scanline(2)),
                 None,
             ],
             2 => [
-                None, None, None, // TODO: Affine
-                None, // TODO: Affine
+                None,
+                None,
+                Some(self.get_affine_text_bg_scanline(2)),
+                Some(self.get_affine_text_bg_scanline(3)),
             ],
             3 => [
                 None,
@@ -199,7 +218,6 @@ impl PPU {
             }
 
             if let Some((sprite_prio, sprite_color)) = sprite_line[i] {
-                // println!("{sprite_prio} {bg_prio}");
                 if sprite_prio <= bg_prio {
                     color = sprite_color;
                     found_pixel = true;
@@ -275,6 +293,8 @@ impl PPU {
 
         let row = (self.scan_line as usize + offset_y) % 8;
 
+        let background_color = self.palette_ram.borrow_mut().read_u16(0);
+        // TODO: Screenblock organizations are wrong; see tonc/sbb_reg.gba
         for tile_col in first_tile_col..(first_tile_col + 31) {
             let screen_offset_x = if 31 < tile_col && tile_col < 64 && n_bg_cols == 64 {
                 0x800
@@ -295,7 +315,6 @@ impl PPU {
             let tile_n = map_entry & 0b11_1111_1111;
             let flip_h = (map_entry >> 10) & 1 == 1;
             let flip_v = (map_entry >> 11) & 1 == 1;
-            let palette_n = (map_entry >> 12) & 0b1111;
             if full_palette_mode {
                 for byte_n in 0..8 {
                     let pixel_x_offset = ((tile_col - first_tile_col) * 8 + byte_n) as isize
@@ -312,7 +331,7 @@ impl PPU {
                         pixel_x_offset as u16,
                         self.scan_line as u16,
                     );
-                    if color != 0
+                    if color != background_color
                         && visible_with_windows
                         && pixel_x_offset >= 0
                         && pixel_x_offset <= 239
@@ -321,6 +340,7 @@ impl PPU {
                     }
                 }
             } else {
+                let palette_n = (map_entry >> 12) & 0b1111;
                 for byte_n in 0..4 {
                     let pixel_x_offset = ((tile_col - first_tile_col) * 8 + 2 * byte_n) as isize
                         - (offset_x as isize) % 8;
@@ -355,10 +375,8 @@ impl PPU {
                         && pixel_x_offset >= 0
                         && pixel_x_offset <= 239
                     {
-                        if color_i_left != 0 {
-                            out[pixel_x_offset as usize] =
-                                Some((color_left as u8, (color_left >> 8) as u8));
-                        }
+                        out[pixel_x_offset as usize] =
+                            Some((color_left as u8, (color_left >> 8) as u8));
                     }
                     let visible_with_windows = self.pixel_visible_with_windows(
                         bg_n,
@@ -370,12 +388,79 @@ impl PPU {
                         && pixel_x_offset >= -1
                         && (pixel_x_offset + 1) <= 239
                     {
-                        if color_i_right != 0 {
-                            out[(pixel_x_offset + 1) as usize] =
-                                Some((color_right as u8, (color_right >> 8) as u8));
-                        }
+                        out[(pixel_x_offset + 1) as usize] =
+                            Some((color_right as u8, (color_right >> 8) as u8));
                     }
                 }
+            }
+        }
+
+        out
+    }
+
+    fn get_affine_text_bg_scanline(&self, bg_n: usize) -> [Option<(u8, u8)>; 240] {
+        let mut out = [None; 240];
+
+        let ctrl = &self.bg_control_regs[bg_n];
+
+        let ref_x = self.bg_ref_regs[bg_n - 2].0.signed_value();
+        let ref_y = self.bg_ref_regs[bg_n - 2].1.signed_value();
+
+        let (pa, pb, pc, pd) = (
+            self.bg_aff_param_regs[bg_n - 2].0.signed_value(),
+            self.bg_aff_param_regs[bg_n - 2].1.signed_value(),
+            self.bg_aff_param_regs[bg_n - 2].2.signed_value(),
+            self.bg_aff_param_regs[bg_n - 2].3.signed_value(),
+        );
+
+        let background_color = self.palette_ram.borrow_mut().read_u16(0);
+        let map_base = ctrl.screen_block() as usize * 0x800;
+
+        let (n_bg_cols, n_bg_rows) = match ctrl.size() {
+            0b00 => (16, 16),
+            0b01 => (32, 32),
+            0b10 => (64, 64),
+            0b11 | _ => (128, 128),
+        };
+
+        for ix in 0..240 {
+            let px = (ref_x + pa * ix + pb * self.scan_line as i32) >> 8;
+            let py = (ref_y + pc * ix + pd * self.scan_line as i32) >> 8;
+
+            if !ctrl.display_overflow() && (px < 0 || py < 0) {
+                continue;
+            }
+
+            let (tile_col, tile_row) = {
+                let mut tile_col = px / 8;
+                let mut tile_row = py / 8;
+                if ctrl.display_overflow() {
+                    tile_col = tile_col.rem_euclid(n_bg_cols as i32);
+                    tile_row = tile_row.rem_euclid(n_bg_rows as i32);
+                }
+                (tile_col as usize, tile_row as usize)
+            };
+
+            // TODO: Can we break in one of these cases?
+            if tile_col >= n_bg_cols || tile_row >= n_bg_rows {
+                continue;
+            }
+
+            let tile_n = self
+                .vram
+                .borrow_mut()
+                .read(map_base + tile_row * n_bg_cols + tile_col);
+            let data = self.vram.borrow_mut().read(
+                0x4000 * ctrl.char_block() as usize
+                    + 64 * tile_n as usize
+                    + (py as usize % 8) * 8
+                    + (px as usize % 8),
+            );
+            let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
+            let visible_with_windows =
+                self.pixel_visible_with_windows(bg_n, ix as u16, self.scan_line as u16);
+            if color != background_color && visible_with_windows {
+                out[ix as usize] = Some((color as u8, (color >> 8) as u8));
             }
         }
 
@@ -385,6 +470,7 @@ impl PPU {
     // Checks whether the given pixel coordinate is visible within the enabled windows.
     // bg_n == 4 corresponds to the OBJ layer
     fn pixel_visible_with_windows(&self, bg_n: usize, x: u16, y: u16) -> bool {
+        // FIXME: Partially offscreen windows don't work
         let enabled_windows = {
             let mut windows = vec![];
             if self.lcd_control_reg.enable_win0() {
@@ -449,8 +535,6 @@ impl PPU {
     fn get_sprite_scanline(&self) -> [Option<(u16, (u8, u8))>; 240] {
         let mut out = [None; 240];
 
-        let y = self.scan_line as u16;
-
         let priority_order = {
             let mut sprite_nums = (0..128).rev().collect::<Vec<_>>();
             sprite_nums.sort_by_key(|sprite_n| {
@@ -460,161 +544,283 @@ impl PPU {
             });
             sprite_nums
         };
+
         for sprite_n in priority_order.into_iter() {
             let oam_addr = 8 * sprite_n;
             let attr0 = ObjAttr0(self.oam.borrow_mut().read_u16(oam_addr + 0));
             let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
             let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
+            let attrs = ObjAttrs(attr0, attr1, attr2);
 
-            let bytes_per_tile = if attr0.colors() { 2 } else { 1 };
-
-            if !attr0.affine() && attr0.disable() {
-                continue;
-            }
-
-            let size = {
-                let size_map = match attr0.shape() {
-                    0 => [(1, 1), (2, 2), (4, 4), (8, 8)], // Square
-                    1 => [(2, 1), (4, 1), (4, 2), (8, 4)], // Horizontal
-                    2 => [(1, 2), (1, 4), (2, 4), (4, 8)], // Vertical
-                    _ => continue,                         // panic!("Illegal obj shape"),
-                };
-                size_map[attr1.size() as usize]
-            };
-
-            let y_offset = if 256 - attr0.y_coord() < 8 * size.1 {
-                if 8 * size.1 - (256 - attr0.y_coord()) <= y {
-                    continue;
-                } else {
-                    y + (256 - attr0.y_coord())
-                }
+            if attrs.0.affine() {
+                self.render_affine_sprite_scanline(&mut out, attrs);
             } else {
-                if attr0.y_coord() > y || attr0.y_coord() + 8 * size.1 <= y {
-                    continue;
-                } else {
-                    y - attr0.y_coord()
-                }
-            };
-
-            let pixel_y = (y_offset % 8) as usize;
-            let row = y_offset / 8;
-            let row_start = attr2.tile()
-                + (if attr1.flip_v() {
-                    (size.1 - 1) - row
-                } else {
-                    row
-                }) * if self.lcd_control_reg.obj_char_mapping() {
-                    size.0 * bytes_per_tile // 1D
-                } else {
-                    0x20 // 2D
-                };
-
-            let background_color = self.palette_ram.borrow_mut().read_u16(0);
-            for col in 0..size.0 {
-                let tile_n = row_start
-                    + (if attr1.flip_h() {
-                        (size.0 - 1) - col
-                    } else {
-                        col
-                    }) * bytes_per_tile;
-                let x = attr1.x_coord() + 8 * col;
-                let full_palette_mode = attr0.colors();
-                if full_palette_mode {
-                    for byte_n in 0..8 {
-                        let pixel_x_offset = (x + byte_n) % 512;
-                        // TODO: This access sometimes goes out of range if the mod is left out
-                        let data = self.vram.borrow_mut().read(
-                            (0x4000 * 4
-                                + 32 * tile_n as usize
-                                + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 8
-                                + (if attr1.flip_h() {
-                                    7 - byte_n as usize
-                                } else {
-                                    byte_n as usize
-                                }))
-                                % 0x18000,
-                        );
-                        let color = self
-                            .palette_ram
-                            .borrow_mut()
-                            .read_u16(0x200 + 2 * (data as usize));
-                        if y as usize + pixel_y < 160 {
-                            let visible_with_windows = self.pixel_visible_with_windows(
-                                4, // OBJ layer
-                                pixel_x_offset as u16,
-                                y + pixel_y as u16,
-                            );
-                            if visible_with_windows
-                                && pixel_x_offset <= 239
-                                && color != background_color
-                            {
-                                out[pixel_x_offset as usize] =
-                                    Some((attr2.priority(), (color as u8, (color >> 8) as u8)));
-                            }
-                        }
-                    }
-                } else {
-                    for byte_n in 0..4 {
-                        let pixel_x_offset = (x + 2 * byte_n) % 512;
-                        // TODO: This access sometimes goes out of range if the mod is left out
-                        let data = self.vram.borrow_mut().read(
-                            (0x4000 * 4
-                                + 32 * tile_n as usize
-                                + (if attr1.flip_v() { 7 - pixel_y } else { pixel_y }) * 4
-                                + (if attr1.flip_h() {
-                                    3 - byte_n as usize
-                                } else {
-                                    byte_n as usize
-                                }))
-                                % 0x18000,
-                        );
-                        let mut color_i_left = data & 0b1111;
-                        let mut color_left = self.palette_ram.borrow_mut().read_u16(
-                            0x200 + 2 * (attr2.palette() as usize * 16 + color_i_left as usize),
-                        );
-                        let mut color_i_right = (data >> 4) & 0b1111;
-                        let mut color_right = self.palette_ram.borrow_mut().read_u16(
-                            0x200 + 2 * (attr2.palette() as usize * 16 + color_i_right as usize),
-                        );
-                        if attr1.flip_h() {
-                            std::mem::swap(&mut color_i_left, &mut color_i_right);
-                            std::mem::swap(&mut color_left, &mut color_right);
-                        }
-                        let visible_with_windows = self.pixel_visible_with_windows(
-                            4, // OBJ layer
-                            pixel_x_offset as u16,
-                            y + pixel_y as u16,
-                        );
-                        if visible_with_windows && pixel_x_offset <= 239 && color_i_left != 0 {
-                            out[pixel_x_offset as usize] = Some((
-                                attr2.priority(),
-                                (color_left as u8, (color_left >> 8) as u8),
-                            ));
-                        }
-                        let visible_with_windows = self.pixel_visible_with_windows(
-                            4, // OBJ layer
-                            pixel_x_offset as u16 + 1,
-                            y + pixel_y as u16,
-                        );
-                        if visible_with_windows && (pixel_x_offset + 1) <= 239 && color_i_right != 0
-                        {
-                            out[pixel_x_offset as usize + 1] = Some((
-                                attr2.priority(),
-                                (color_right as u8, (color_right >> 8) as u8),
-                            ));
-                        }
-                    }
-                }
+                self.render_regular_sprite_scanline(&mut out, attrs);
             }
         }
 
         out
     }
+
+    fn render_regular_sprite_scanline(
+        &self,
+        line_buf: &mut [Option<(u16, (u8, u8))>; 240],
+        attrs: ObjAttrs,
+    ) {
+        if attrs.0.disable() {
+            return;
+        }
+
+        let bytes_per_tile = if attrs.0.colors() { 2 } else { 1 };
+        let size = attrs.size();
+
+        let y = self.scan_line as u16;
+
+        let y_offset = if 256 - attrs.0.y_coord() < 8 * size.1 {
+            if 8 * size.1 - (256 - attrs.0.y_coord()) <= y {
+                return;
+            } else {
+                y + (256 - attrs.0.y_coord())
+            }
+        } else {
+            if attrs.0.y_coord() > y || attrs.0.y_coord() + 8 * size.1 <= y {
+                return;
+            } else {
+                y - attrs.0.y_coord()
+            }
+        };
+
+        let pixel_y = (y_offset % 8) as usize;
+        let row = y_offset / 8;
+        let row_start = attrs.2.tile()
+            + (if attrs.1.flip_v() {
+                (size.1 - 1) - row
+            } else {
+                row
+            }) * if self.lcd_control_reg.obj_char_mapping() {
+                size.0 * bytes_per_tile // 1D
+            } else {
+                0x20 // 2D
+            };
+
+        let background_color = self.palette_ram.borrow_mut().read_u16(0);
+        for col in 0..size.0 {
+            let tile_n = row_start
+                + (if attrs.1.flip_h() {
+                    (size.0 - 1) - col
+                } else {
+                    col
+                }) * bytes_per_tile;
+            let x = attrs.1.x_coord() + 8 * col;
+            let full_palette_mode = attrs.0.colors();
+            if full_palette_mode {
+                for byte_n in 0..8 {
+                    let pixel_x_offset = (x + byte_n) % 512;
+                    // TODO: This access sometimes goes out of range if the mod is left out
+                    let data = self.vram.borrow_mut().read(
+                        (0x4000 * 4
+                            + 32 * tile_n as usize
+                            + (if attrs.1.flip_v() {
+                                7 - pixel_y
+                            } else {
+                                pixel_y
+                            }) * 8
+                            + (if attrs.1.flip_h() {
+                                7 - byte_n as usize
+                            } else {
+                                byte_n as usize
+                            }))
+                            % 0x18000,
+                    );
+                    let color = self
+                        .palette_ram
+                        .borrow_mut()
+                        .read_u16(0x200 + 2 * (data as usize));
+                    if y as usize + pixel_y < 160 {
+                        let visible_with_windows = self.pixel_visible_with_windows(
+                            4, // OBJ layer
+                            pixel_x_offset as u16,
+                            y + pixel_y as u16,
+                        );
+                        if visible_with_windows
+                            && pixel_x_offset <= 239
+                            && color != background_color
+                        {
+                            line_buf[pixel_x_offset as usize] =
+                                Some((attrs.2.priority(), (color as u8, (color >> 8) as u8)));
+                        }
+                    }
+                }
+            } else {
+                for byte_n in 0..4 {
+                    let pixel_x_offset = (x + 2 * byte_n) % 512;
+                    // TODO: This access sometimes goes out of range if the mod is left out
+                    let data = self.vram.borrow_mut().read(
+                        (0x4000 * 4
+                            + 32 * tile_n as usize
+                            + (if attrs.1.flip_v() {
+                                7 - pixel_y
+                            } else {
+                                pixel_y
+                            }) * 4
+                            + (if attrs.1.flip_h() {
+                                3 - byte_n as usize
+                            } else {
+                                byte_n as usize
+                            }))
+                            % 0x18000,
+                    );
+                    let mut color_i_left = data & 0b1111;
+                    let mut color_left = self.palette_ram.borrow_mut().read_u16(
+                        0x200 + 2 * (attrs.2.palette() as usize * 16 + color_i_left as usize),
+                    );
+                    let mut color_i_right = (data >> 4) & 0b1111;
+                    let mut color_right = self.palette_ram.borrow_mut().read_u16(
+                        0x200 + 2 * (attrs.2.palette() as usize * 16 + color_i_right as usize),
+                    );
+                    if attrs.1.flip_h() {
+                        std::mem::swap(&mut color_i_left, &mut color_i_right);
+                        std::mem::swap(&mut color_left, &mut color_right);
+                    }
+                    let visible_with_windows = self.pixel_visible_with_windows(
+                        4, // OBJ layer
+                        pixel_x_offset as u16,
+                        y + pixel_y as u16, // TODO: Is it right to add pixel_y here and below?
+                    );
+                    if visible_with_windows && pixel_x_offset <= 239 && color_i_left != 0 {
+                        line_buf[pixel_x_offset as usize] = Some((
+                            attrs.2.priority(),
+                            (color_left as u8, (color_left >> 8) as u8),
+                        ));
+                    }
+                    let visible_with_windows = self.pixel_visible_with_windows(
+                        4, // OBJ layer
+                        pixel_x_offset as u16 + 1,
+                        y + pixel_y as u16,
+                    );
+                    if visible_with_windows && (pixel_x_offset + 1) <= 239 && color_i_right != 0 {
+                        line_buf[pixel_x_offset as usize + 1] = Some((
+                            attrs.2.priority(),
+                            (color_right as u8, (color_right >> 8) as u8),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    fn render_affine_sprite_scanline(
+        &self,
+        line_buf: &mut [Option<(u16, (u8, u8))>; 240],
+        attrs: ObjAttrs,
+    ) {
+        let (pa, pb, pc, pd) = {
+            let params_base = 32 * attrs.1.affine_params() as usize + 6;
+            let mut oam = self.oam.borrow_mut();
+            (
+                oam.read_u16(params_base + 8 * 0) as i16 as i32,
+                oam.read_u16(params_base + 8 * 1) as i16 as i32,
+                oam.read_u16(params_base + 8 * 2) as i16 as i32,
+                oam.read_u16(params_base + 8 * 3) as i16 as i32,
+            )
+        };
+
+        let ref_x = {
+            let mut x = attrs.1.x_coord() as i32;
+            if x >= 240 {
+                x -= 512;
+            }
+            x
+        };
+        let ref_y = {
+            let mut y = attrs.0.y_coord() as i32;
+            if y >= 160 {
+                y -= 256;
+            }
+            y
+        };
+
+        let bytes_per_tile = if attrs.0.colors() { 2 } else { 1 };
+        let size = attrs.size();
+        let hwidth = size.0 as i32 * 4 * if attrs.0.double_size() { 2 } else { 1 };
+        let hheight = size.1 as i32 * 4 * if attrs.0.double_size() { 2 } else { 1 };
+
+        let y = self.scan_line as i32;
+        let iy = y - (ref_y + hheight);
+
+        if !(y >= ref_y && y < ref_y + hheight * 2) {
+            return;
+        }
+
+        for ix in (-hwidth)..hwidth {
+            // TODO: Most of the below can be refactored to some get_pixel function
+            // and something like draw_pixel
+            // same with regular sprites
+            let screen_x = ref_x + hwidth + ix;
+            if screen_x < 0 {
+                continue;
+            }
+            if screen_x >= 240 {
+                break;
+            }
+
+            let px = (pa * ix + pb * iy) >> 8;
+            let py = (pc * ix + pd * iy) >> 8;
+
+            let tex_x = px + size.0 as i32 * 4;
+            let tex_y = py + size.1 as i32 * 4;
+
+            // TODO: Add 256-color sprites etc.
+            if (tex_x >= 0 && tex_x < size.0 as i32 * 8)
+                && (tex_y >= 0 && tex_y < size.1 as i32 * 8)
+            {
+                let row = tex_y as u16 / 8;
+                let row_start = attrs.2.tile()
+                    + row
+                        * if self.lcd_control_reg.obj_char_mapping() {
+                            size.0 * bytes_per_tile // 1D
+                        } else {
+                            0x20 // 2D
+                        };
+                let col = tex_x as u16 / 8;
+                let tile_n = row_start + col * bytes_per_tile;
+
+                let pixel_y = tex_y as usize % 8;
+                let byte_n = ((tex_x as usize) / 2) % 4;
+                let data = self.vram.borrow_mut().read(
+                    (0x4000 * 4 + 32 * tile_n as usize + pixel_y * 4 + (byte_n as usize)) % 0x18000,
+                );
+
+                let color_i = match tex_x % 2 {
+                    0 => data & 0b1111,            // Left pixel
+                    1 | _ => (data >> 4) & 0b1111, // Right pixel
+                } as usize;
+
+                if color_i == 0 {
+                    continue;
+                }
+
+                let color = self
+                    .palette_ram
+                    .borrow_mut()
+                    .read_u16(0x200 + 2 * (attrs.2.palette() as usize * 16 + color_i));
+
+                let visible_with_windows = self.pixel_visible_with_windows(
+                    4, // OBJ layer
+                    screen_x as u16 + 1,
+                    y as u16,
+                );
+                if visible_with_windows {
+                    line_buf[screen_x as usize] =
+                        Some((attrs.2.priority(), (color as u8, (color >> 8) as u8)));
+                }
+            }
+        }
+    }
 }
 
 impl Memory for PPU {
     fn peek(&self, addr: usize) -> u8 {
-        // TODO
         match addr {
             0x000 => self.lcd_control_reg.lo_byte(),
             0x001 => self.lcd_control_reg.hi_byte(),
@@ -649,6 +855,39 @@ impl Memory for PPU {
             0x01E => self.scroll_regs[3].1.lo_byte(),
             0x01F => self.scroll_regs[3].1.hi_byte(),
 
+            0x020 => self.bg_aff_param_regs[0].0.lo_byte(),
+            0x021 => self.bg_aff_param_regs[0].0.hi_byte(),
+            0x022 => self.bg_aff_param_regs[0].1.lo_byte(),
+            0x023 => self.bg_aff_param_regs[0].1.hi_byte(),
+            0x024 => self.bg_aff_param_regs[0].2.lo_byte(),
+            0x025 => self.bg_aff_param_regs[0].2.hi_byte(),
+            0x026 => self.bg_aff_param_regs[0].3.lo_byte(),
+            0x027 => self.bg_aff_param_regs[0].3.hi_byte(),
+            0x028 => self.bg_ref_regs[0].0.byte_0(),
+            0x029 => self.bg_ref_regs[0].0.byte_1(),
+            0x02A => self.bg_ref_regs[0].0.byte_2(),
+            0x02B => self.bg_ref_regs[0].0.byte_3(),
+            0x02C => self.bg_ref_regs[0].1.byte_0(),
+            0x02D => self.bg_ref_regs[0].1.byte_1(),
+            0x02E => self.bg_ref_regs[0].1.byte_2(),
+            0x02F => self.bg_ref_regs[0].1.byte_3(),
+            0x030 => self.bg_aff_param_regs[1].0.lo_byte(),
+            0x031 => self.bg_aff_param_regs[1].0.hi_byte(),
+            0x032 => self.bg_aff_param_regs[1].1.lo_byte(),
+            0x033 => self.bg_aff_param_regs[1].1.hi_byte(),
+            0x034 => self.bg_aff_param_regs[1].2.lo_byte(),
+            0x035 => self.bg_aff_param_regs[1].2.hi_byte(),
+            0x036 => self.bg_aff_param_regs[1].3.lo_byte(),
+            0x037 => self.bg_aff_param_regs[1].3.hi_byte(),
+            0x038 => self.bg_ref_regs[1].0.byte_0(),
+            0x039 => self.bg_ref_regs[1].0.byte_1(),
+            0x03A => self.bg_ref_regs[1].0.byte_2(),
+            0x03B => self.bg_ref_regs[1].0.byte_3(),
+            0x03C => self.bg_ref_regs[1].1.byte_0(),
+            0x03D => self.bg_ref_regs[1].1.byte_1(),
+            0x03E => self.bg_ref_regs[1].1.byte_2(),
+            0x03F => self.bg_ref_regs[1].1.byte_3(),
+
             0x040 => self.win0_coords.0.lo_byte(),
             0x041 => self.win0_coords.0.hi_byte(),
             0x042 => self.win1_coords.0.lo_byte(),
@@ -666,7 +905,6 @@ impl Memory for PPU {
     }
 
     fn write(&mut self, addr: usize, data: u8) {
-        // TODO
         match addr {
             0x000 => self.lcd_control_reg.set_lo_byte(data),
             0x001 => self.lcd_control_reg.set_hi_byte(data),
@@ -699,6 +937,39 @@ impl Memory for PPU {
             0x01D => self.scroll_regs[3].0.set_hi_byte(data),
             0x01E => self.scroll_regs[3].1.set_lo_byte(data),
             0x01F => self.scroll_regs[3].1.set_hi_byte(data),
+
+            0x020 => self.bg_aff_param_regs[0].0.set_lo_byte(data),
+            0x021 => self.bg_aff_param_regs[0].0.set_hi_byte(data),
+            0x022 => self.bg_aff_param_regs[0].1.set_lo_byte(data),
+            0x023 => self.bg_aff_param_regs[0].1.set_hi_byte(data),
+            0x024 => self.bg_aff_param_regs[0].2.set_lo_byte(data),
+            0x025 => self.bg_aff_param_regs[0].2.set_hi_byte(data),
+            0x026 => self.bg_aff_param_regs[0].3.set_lo_byte(data),
+            0x027 => self.bg_aff_param_regs[0].3.set_hi_byte(data),
+            0x028 => self.bg_ref_regs[0].0.set_byte_0(data),
+            0x029 => self.bg_ref_regs[0].0.set_byte_1(data),
+            0x02A => self.bg_ref_regs[0].0.set_byte_2(data),
+            0x02B => self.bg_ref_regs[0].0.set_byte_3(data),
+            0x02C => self.bg_ref_regs[0].1.set_byte_0(data),
+            0x02D => self.bg_ref_regs[0].1.set_byte_1(data),
+            0x02E => self.bg_ref_regs[0].1.set_byte_2(data),
+            0x02F => self.bg_ref_regs[0].1.set_byte_3(data),
+            0x030 => self.bg_aff_param_regs[1].0.set_lo_byte(data),
+            0x031 => self.bg_aff_param_regs[1].0.set_hi_byte(data),
+            0x032 => self.bg_aff_param_regs[1].1.set_lo_byte(data),
+            0x033 => self.bg_aff_param_regs[1].1.set_hi_byte(data),
+            0x034 => self.bg_aff_param_regs[1].2.set_lo_byte(data),
+            0x035 => self.bg_aff_param_regs[1].2.set_hi_byte(data),
+            0x036 => self.bg_aff_param_regs[1].3.set_lo_byte(data),
+            0x037 => self.bg_aff_param_regs[1].3.set_hi_byte(data),
+            0x038 => self.bg_ref_regs[1].0.set_byte_0(data),
+            0x039 => self.bg_ref_regs[1].0.set_byte_1(data),
+            0x03A => self.bg_ref_regs[1].0.set_byte_2(data),
+            0x03B => self.bg_ref_regs[1].0.set_byte_3(data),
+            0x03C => self.bg_ref_regs[1].1.set_byte_0(data),
+            0x03D => self.bg_ref_regs[1].1.set_byte_1(data),
+            0x03E => self.bg_ref_regs[1].1.set_byte_2(data),
+            0x03F => self.bg_ref_regs[1].1.set_byte_3(data),
 
             0x040 => self.win0_coords.0.set_lo_byte(data),
             0x041 => self.win0_coords.0.set_hi_byte(data),
