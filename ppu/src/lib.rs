@@ -23,6 +23,7 @@ pub struct PPU {
     lcd_control_reg: LcdControlReg,
     lcd_status_reg: LcdStatusReg,
     bg_control_regs: [BgControlReg; 4],
+    bg_ref_regs: [(BgRefReg, BgRefReg); 2],
     scroll_regs: [(ScrollReg, ScrollReg); 4],
     win0_coords: (WinCoordReg, WinCoordReg),
     win1_coords: (WinCoordReg, WinCoordReg),
@@ -55,6 +56,7 @@ impl PPU {
                 BgControlReg(0),
                 BgControlReg(0),
             ],
+            bg_ref_regs: [(BgRefReg(0), BgRefReg(0)), (BgRefReg(0), BgRefReg(0))],
             scroll_regs: [
                 (ScrollReg(0), ScrollReg(0)),
                 (ScrollReg(0), ScrollReg(0)),
@@ -275,6 +277,7 @@ impl PPU {
         let row = (self.scan_line as usize + offset_y) % 8;
 
         let background_color = self.palette_ram.borrow_mut().read_u16(0);
+        // TODO: Screenblock organizations are wrong; see tonc/sbb_reg.gba
         for tile_col in first_tile_col..(first_tile_col + 31) {
             let screen_offset_x = if 31 < tile_col && tile_col < 64 && n_bg_cols == 64 {
                 0x800
@@ -374,6 +377,17 @@ impl PPU {
                 }
             }
         }
+
+        out
+    }
+
+    fn get_affine_text_bg_scanline(&self, bg_n: usize) -> [Option<(u8, u8)>; 240] {
+        let mut out = [None; 240];
+
+        let ctrl = &self.bg_control_regs[bg_n];
+
+        let ref_x = self.bg_ref_regs[bg_n - 2].0.signed_value();
+        let ref_y = self.bg_ref_regs[bg_n - 2].1.signed_value();
 
         out
     }
@@ -732,7 +746,6 @@ impl PPU {
 
 impl Memory for PPU {
     fn peek(&self, addr: usize) -> u8 {
-        // TODO
         match addr {
             0x000 => self.lcd_control_reg.lo_byte(),
             0x001 => self.lcd_control_reg.hi_byte(),
@@ -767,6 +780,23 @@ impl Memory for PPU {
             0x01E => self.scroll_regs[3].1.lo_byte(),
             0x01F => self.scroll_regs[3].1.hi_byte(),
 
+            0x028 => self.bg_ref_regs[0].0.byte_0(),
+            0x029 => self.bg_ref_regs[0].0.byte_1(),
+            0x02A => self.bg_ref_regs[0].0.byte_2(),
+            0x02B => self.bg_ref_regs[0].0.byte_3(),
+            0x02C => self.bg_ref_regs[0].1.byte_0(),
+            0x02D => self.bg_ref_regs[0].1.byte_1(),
+            0x02E => self.bg_ref_regs[0].1.byte_2(),
+            0x02F => self.bg_ref_regs[0].1.byte_3(),
+            0x038 => self.bg_ref_regs[1].0.byte_0(),
+            0x039 => self.bg_ref_regs[1].0.byte_1(),
+            0x03A => self.bg_ref_regs[1].0.byte_2(),
+            0x03B => self.bg_ref_regs[1].0.byte_3(),
+            0x03C => self.bg_ref_regs[1].1.byte_0(),
+            0x03D => self.bg_ref_regs[1].1.byte_1(),
+            0x03E => self.bg_ref_regs[1].1.byte_2(),
+            0x03F => self.bg_ref_regs[1].1.byte_3(),
+
             0x040 => self.win0_coords.0.lo_byte(),
             0x041 => self.win0_coords.0.hi_byte(),
             0x042 => self.win1_coords.0.lo_byte(),
@@ -784,7 +814,6 @@ impl Memory for PPU {
     }
 
     fn write(&mut self, addr: usize, data: u8) {
-        // TODO
         match addr {
             0x000 => self.lcd_control_reg.set_lo_byte(data),
             0x001 => self.lcd_control_reg.set_hi_byte(data),
@@ -817,6 +846,23 @@ impl Memory for PPU {
             0x01D => self.scroll_regs[3].0.set_hi_byte(data),
             0x01E => self.scroll_regs[3].1.set_lo_byte(data),
             0x01F => self.scroll_regs[3].1.set_hi_byte(data),
+
+            0x028 => self.bg_ref_regs[0].0.set_byte_0(data),
+            0x029 => self.bg_ref_regs[0].0.set_byte_1(data),
+            0x02A => self.bg_ref_regs[0].0.set_byte_2(data),
+            0x02B => self.bg_ref_regs[0].0.set_byte_3(data),
+            0x02C => self.bg_ref_regs[0].1.set_byte_0(data),
+            0x02D => self.bg_ref_regs[0].1.set_byte_1(data),
+            0x02E => self.bg_ref_regs[0].1.set_byte_2(data),
+            0x02F => self.bg_ref_regs[0].1.set_byte_3(data),
+            0x038 => self.bg_ref_regs[1].0.set_byte_0(data),
+            0x039 => self.bg_ref_regs[1].0.set_byte_1(data),
+            0x03A => self.bg_ref_regs[1].0.set_byte_2(data),
+            0x03B => self.bg_ref_regs[1].0.set_byte_3(data),
+            0x03C => self.bg_ref_regs[1].1.set_byte_0(data),
+            0x03D => self.bg_ref_regs[1].1.set_byte_1(data),
+            0x03E => self.bg_ref_regs[1].1.set_byte_2(data),
+            0x03F => self.bg_ref_regs[1].1.set_byte_3(data),
 
             0x040 => self.win0_coords.0.set_lo_byte(data),
             0x041 => self.win0_coords.0.set_hi_byte(data),
