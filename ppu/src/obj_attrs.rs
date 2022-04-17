@@ -1,3 +1,17 @@
+pub struct ObjAttrs(pub ObjAttr0, pub ObjAttr1, pub ObjAttr2);
+
+impl ObjAttrs {
+    pub fn size(&self) -> (u16, u16) {
+        let size_map = match self.0.shape() {
+            0 => [(1, 1), (2, 2), (4, 4), (8, 8)], // Square
+            1 => [(2, 1), (4, 1), (4, 2), (8, 4)], // Horizontal
+            2 => [(1, 2), (1, 4), (2, 4), (4, 8)], // Vertical
+            _ => return (8, 8),                    // panic!("Illegal obj shape"),
+        };
+        size_map[self.1.size() as usize]
+    }
+}
+
 bitfield! {
   pub struct ObjAttr0(u16);
   impl Debug;
