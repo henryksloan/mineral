@@ -199,7 +199,6 @@ impl PPU {
             }
 
             if let Some((sprite_prio, sprite_color)) = sprite_line[i] {
-                // println!("{sprite_prio} {bg_prio}");
                 if sprite_prio <= bg_prio {
                     color = sprite_color;
                     found_pixel = true;
@@ -275,6 +274,7 @@ impl PPU {
 
         let row = (self.scan_line as usize + offset_y) % 8;
 
+        let background_color = self.palette_ram.borrow_mut().read_u16(0);
         for tile_col in first_tile_col..(first_tile_col + 31) {
             let screen_offset_x = if 31 < tile_col && tile_col < 64 && n_bg_cols == 64 {
                 0x800
@@ -312,7 +312,7 @@ impl PPU {
                         pixel_x_offset as u16,
                         self.scan_line as u16,
                     );
-                    if color != 0
+                    if color != background_color
                         && visible_with_windows
                         && pixel_x_offset >= 0
                         && pixel_x_offset <= 239
@@ -355,10 +355,8 @@ impl PPU {
                         && pixel_x_offset >= 0
                         && pixel_x_offset <= 239
                     {
-                        if color_i_left != 0 {
-                            out[pixel_x_offset as usize] =
-                                Some((color_left as u8, (color_left >> 8) as u8));
-                        }
+                        out[pixel_x_offset as usize] =
+                            Some((color_left as u8, (color_left >> 8) as u8));
                     }
                     let visible_with_windows = self.pixel_visible_with_windows(
                         bg_n,
@@ -370,10 +368,8 @@ impl PPU {
                         && pixel_x_offset >= -1
                         && (pixel_x_offset + 1) <= 239
                     {
-                        if color_i_right != 0 {
-                            out[(pixel_x_offset + 1) as usize] =
-                                Some((color_right as u8, (color_right >> 8) as u8));
-                        }
+                        out[(pixel_x_offset + 1) as usize] =
+                            Some((color_right as u8, (color_right >> 8) as u8));
                     }
                 }
             }
@@ -691,45 +687,24 @@ impl PPU {
             {
                 let row = tex_y as u16 / 8;
                 let row_start = attrs.2.tile()
-                    + (if attrs.1.flip_v() {
-                        (size.1 - 1) - row
-                    } else {
-                        row
-                    }) * if self.lcd_control_reg.obj_char_mapping() {
-                        size.0 * bytes_per_tile // 1D
-                    } else {
-                        0x20 // 2D
-                    };
+                    + row
+                        * if self.lcd_control_reg.obj_char_mapping() {
+                            size.0 * bytes_per_tile // 1D
+                        } else {
+                            0x20 // 2D
+                        };
                 let col = tex_x as u16 / 8;
-                let tile_n = row_start
-                    + (if attrs.1.flip_h() {
-                        (size.0 - 1) - col
-                    } else {
-                        col
-                    }) * bytes_per_tile;
+                let tile_n = row_start + col * bytes_per_tile;
 
                 let pixel_y = tex_y as usize % 8;
                 let byte_n = ((tex_x as usize) / 2) % 4;
                 let data = self.vram.borrow_mut().read(
-                    (0x4000 * 4
-                        + 32 * tile_n as usize
-                        + (if attrs.1.flip_v() {
-                            7 - pixel_y
-                        } else {
-                            pixel_y
-                        }) * 4
-                        + (if attrs.1.flip_h() {
-                            3 - byte_n as usize
-                        } else {
-                            byte_n as usize
-                        }))
-                        % 0x18000,
+                    (0x4000 * 4 + 32 * tile_n as usize + pixel_y * 4 + (byte_n as usize)) % 0x18000,
                 );
 
-                let color_i = if (tex_x % 2 == 1) ^ attrs.1.flip_h() {
-                    (data >> 4) & 0b1111 // Right pixel
-                } else {
-                    data & 0b1111 // Left pixel
+                let color_i = match tex_x % 2 {
+                    0 => data & 0b1111,            // Left pixel
+                    1 | _ => (data >> 4) & 0b1111, // Right pixel
                 } as usize;
 
                 if color_i == 0 {
