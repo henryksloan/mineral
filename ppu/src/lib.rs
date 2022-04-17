@@ -416,7 +416,7 @@ impl PPU {
         let background_color = self.palette_ram.borrow_mut().read_u16(0);
         let map_base = ctrl.screen_block() as usize * 0x800;
 
-        let (n_bg_cols, n_bg_rows) = match self.bg_control_regs[bg_n].size() {
+        let (n_bg_cols, n_bg_rows) = match ctrl.size() {
             0b00 => (16, 16),
             0b01 => (32, 32),
             0b10 => (64, 64),
@@ -426,6 +426,10 @@ impl PPU {
         for ix in 0..240 {
             let px = (ref_x + pa * ix + pb * self.scan_line as i32) >> 8;
             let py = (ref_y + pc * ix + pd * self.scan_line as i32) >> 8;
+
+            if !ctrl.display_overflow() && (px < 0 || py < 0) {
+                continue;
+            }
 
             let (tile_col, tile_row) = {
                 let mut tile_col = px / 8;
@@ -450,7 +454,7 @@ impl PPU {
                 0x4000 * ctrl.char_block() as usize
                     + 64 * tile_n as usize
                     + (py as usize % 8) * 8
-                    + (ix as usize % 8),
+                    + (px as usize % 8),
             );
             let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
             let visible_with_windows =
