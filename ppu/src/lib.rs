@@ -25,6 +25,7 @@ pub struct PPU {
     bg_control_regs: [BgControlReg; 4],
     bg_ref_regs: [(BgRefReg, BgRefReg); 2],
     bg_aff_param_regs: [(BgAffParamReg, BgAffParamReg, BgAffParamReg, BgAffParamReg); 2],
+    blend_control_reg: BlendControlReg,
     scroll_regs: [(ScrollReg, ScrollReg); 4],
     win0_coords: (WinCoordReg, WinCoordReg),
     win1_coords: (WinCoordReg, WinCoordReg),
@@ -74,6 +75,7 @@ impl PPU {
                     BgAffParamReg(0),
                 ),
             ],
+            blend_control_reg: BlendControlReg(0),
             scroll_regs: [
                 (ScrollReg(0), ScrollReg(0)),
                 (ScrollReg(0), ScrollReg(0)),
@@ -915,6 +917,9 @@ impl Memory for PPU {
             0x049 => self.win_inside.hi_byte(),
             0x04A => self.win_outside.lo_byte(),
             0x04B => self.win_outside.hi_byte(),
+
+            0x50 => self.blend_control_reg.lo_byte(),
+            0x51 => self.blend_control_reg.hi_byte(),
             _ => 0,
         }
     }
@@ -998,6 +1003,9 @@ impl Memory for PPU {
             0x049 => self.win_inside.set_hi_byte(data),
             0x04A => self.win_outside.set_lo_byte(data),
             0x04B => self.win_outside.set_hi_byte(data),
+
+            0x50 => self.blend_control_reg.set_lo_byte(data),
+            0x51 => self.blend_control_reg.set_hi_byte(data),
             _ => {}
         }
 
