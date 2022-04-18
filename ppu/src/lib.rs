@@ -22,11 +22,16 @@ pub struct PPU {
 
     lcd_control_reg: LcdControlReg,
     lcd_status_reg: LcdStatusReg,
+
     bg_control_regs: [BgControlReg; 4],
+    scroll_regs: [(ScrollReg, ScrollReg); 4],
     bg_ref_regs: [(BgRefReg, BgRefReg); 2],
     bg_aff_param_regs: [(BgAffParamReg, BgAffParamReg, BgAffParamReg, BgAffParamReg); 2],
+
     blend_control_reg: BlendControlReg,
-    scroll_regs: [(ScrollReg, ScrollReg); 4],
+    blend_alpha_reg: BlendAlphaReg,
+    blend_fade_reg: BlendFadeReg,
+
     win0_coords: (WinCoordReg, WinCoordReg),
     win1_coords: (WinCoordReg, WinCoordReg),
     win_inside: WinInsideControlReg,
@@ -54,11 +59,18 @@ impl PPU {
 
             lcd_control_reg: LcdControlReg(0),
             lcd_status_reg: LcdStatusReg(0),
+
             bg_control_regs: [
                 BgControlReg(0),
                 BgControlReg(0),
                 BgControlReg(0),
                 BgControlReg(0),
+            ],
+            scroll_regs: [
+                (ScrollReg(0), ScrollReg(0)),
+                (ScrollReg(0), ScrollReg(0)),
+                (ScrollReg(0), ScrollReg(0)),
+                (ScrollReg(0), ScrollReg(0)),
             ],
             bg_ref_regs: [(BgRefReg(0), BgRefReg(0)), (BgRefReg(0), BgRefReg(0))],
             bg_aff_param_regs: [
@@ -75,13 +87,11 @@ impl PPU {
                     BgAffParamReg(0),
                 ),
             ],
+
             blend_control_reg: BlendControlReg(0),
-            scroll_regs: [
-                (ScrollReg(0), ScrollReg(0)),
-                (ScrollReg(0), ScrollReg(0)),
-                (ScrollReg(0), ScrollReg(0)),
-                (ScrollReg(0), ScrollReg(0)),
-            ],
+            blend_alpha_reg: BlendAlphaReg(0),
+            blend_fade_reg: BlendFadeReg(0),
+
             win0_coords: (WinCoordReg(0), WinCoordReg(0)),
             win1_coords: (WinCoordReg(0), WinCoordReg(0)),
             win_inside: WinInsideControlReg(0),
@@ -1006,6 +1016,10 @@ impl Memory for PPU {
 
             0x50 => self.blend_control_reg.set_lo_byte(data),
             0x51 => self.blend_control_reg.set_hi_byte(data),
+            0x52 => self.blend_alpha_reg.set_lo_byte(data),
+            0x53 => self.blend_alpha_reg.set_hi_byte(data),
+            0x54 => self.blend_fade_reg.set_lo_byte(data),
+            0x55 => self.blend_fade_reg.set_hi_byte(data),
             _ => {}
         }
 
