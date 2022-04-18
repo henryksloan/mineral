@@ -31,6 +31,8 @@ pub struct PPU {
     win_inside: WinInsideControlReg,
     win_outside: WinOutsideControlReg,
 
+    bg_ref_internal: [(i32, i32); 2],
+
     framebuffer: [u8; 240 * 160 * 2],
     frame_ready: bool,
 }
@@ -82,6 +84,8 @@ impl PPU {
             win1_coords: (WinCoordReg(0), WinCoordReg(0)),
             win_inside: WinInsideControlReg(0),
             win_outside: WinOutsideControlReg(0),
+
+            bg_ref_internal: [(0, 0); 2],
 
             framebuffer: [0; 240 * 160 * 2],
             frame_ready: false,
@@ -135,6 +139,22 @@ impl PPU {
             hblank = true;
             if self.lcd_status_reg.hblank_irq() {
                 hblank_irq = true;
+            }
+        }
+
+        if self.scan_cycle == 1231 {
+            if self.scan_line < 160 {
+                for i in 0..2 {
+                    self.bg_ref_internal[i].0 += self.bg_aff_param_regs[i].1.signed_value();
+                    self.bg_ref_internal[i].1 += self.bg_aff_param_regs[i].3.signed_value();
+                }
+            } else {
+                for i in 0..2 {
+                    self.bg_ref_internal[i] = (
+                        self.bg_ref_regs[i].0.signed_value(),
+                        self.bg_ref_regs[i].1.signed_value(),
+                    );
+                }
             }
         }
 
@@ -403,14 +423,9 @@ impl PPU {
 
         let ctrl = &self.bg_control_regs[bg_n];
 
-        let ref_x = self.bg_ref_regs[bg_n - 2].0.signed_value();
-        let ref_y = self.bg_ref_regs[bg_n - 2].1.signed_value();
-
-        let (pa, pb, pc, pd) = (
+        let (pa, pc) = (
             self.bg_aff_param_regs[bg_n - 2].0.signed_value(),
-            self.bg_aff_param_regs[bg_n - 2].1.signed_value(),
             self.bg_aff_param_regs[bg_n - 2].2.signed_value(),
-            self.bg_aff_param_regs[bg_n - 2].3.signed_value(),
         );
 
         let background_color = self.palette_ram.borrow_mut().read_u16(0);
@@ -424,8 +439,8 @@ impl PPU {
         };
 
         for ix in 0..240 {
-            let px = (ref_x + pa * ix + pb * self.scan_line as i32) >> 8;
-            let py = (ref_y + pc * ix + pd * self.scan_line as i32) >> 8;
+            let px = (self.bg_ref_internal[bg_n - 2].0 + pa * ix) >> 8;
+            let py = (self.bg_ref_internal[bg_n - 2].1 + pc * ix) >> 8;
 
             if !ctrl.display_overflow() && (px < 0 || py < 0) {
                 continue;
@@ -984,6 +999,14 @@ impl Memory for PPU {
             0x04A => self.win_outside.set_lo_byte(data),
             0x04B => self.win_outside.set_hi_byte(data),
             _ => {}
+        }
+
+        if addr >= 0x26 && addr <= 0x3F {
+            let i = (addr - 0x26) / 0x10;
+            self.bg_ref_internal[i] = (
+                self.bg_ref_regs[i].0.signed_value(),
+                self.bg_ref_regs[i].1.signed_value(),
+            );
         }
     }
 }
