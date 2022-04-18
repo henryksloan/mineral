@@ -326,14 +326,13 @@ impl PPU {
         let row = (self.scan_line as usize + offset_y) % 8;
 
         let background_color = self.palette_ram.borrow_mut().read_u16(0);
-        // TODO: Screenblock organizations are wrong; see tonc/sbb_reg.gba
         for tile_col in first_tile_col..(first_tile_col + 31) {
-            let screen_offset_x = if 31 < tile_col && tile_col < 64 && n_bg_cols == 64 {
+            let screen_offset_x = if n_bg_cols == 64 && 31 < tile_col && tile_col < 64 {
                 0x800
             } else {
                 0
             };
-            let screen_offset_y = if 31 < tile_row && tile_row < 64 && n_bg_rows == 64 {
+            let screen_offset_y = if n_bg_rows == 64 && 31 < tile_row && tile_row < 64 {
                 (n_bg_cols / 32) * 0x800
             } else {
                 0
@@ -342,7 +341,7 @@ impl PPU {
                 map_base
                     + screen_offset_x
                     + screen_offset_y
-                    + 2 * (tile_row * 32 + (tile_col % 32)),
+                    + 2 * ((tile_row % 32) * 32 + (tile_col % 32)),
             );
             let tile_n = map_entry & 0b11_1111_1111;
             let flip_h = (map_entry >> 10) & 1 == 1;
