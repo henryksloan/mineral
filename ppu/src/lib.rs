@@ -562,6 +562,10 @@ impl PPU {
     fn get_sprite_scanline(&self) -> [Option<(u16, (u8, u8))>; 240] {
         let mut out = [None; 240];
 
+        if !self.lcd_control_reg.enable_obj() {
+            return out;
+        }
+
         let priority_order = {
             let mut sprite_nums = (0..128).rev().collect::<Vec<_>>();
             sprite_nums.sort_by_key(|sprite_n| {
