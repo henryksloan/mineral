@@ -482,8 +482,6 @@ impl PPU {
         let tile_row = (adjusted_y / 8) % n_bg_rows;
         let row = adjusted_y % 8;
 
-        let background_color = self.palette_ram.borrow_mut().read_u16(0);
-
         for ix in 0..240 {
             let visible_with_windows =
                 self.pixel_visible_with_windows(bg_n, ix as u16, self.scan_line as u16);
@@ -524,8 +522,8 @@ impl PPU {
                         + (if flip_v { 7 - row } else { row }) * 8
                         + (if flip_h { 7 - pixel_n } else { pixel_n }),
                 );
-                let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
-                if color != background_color {
+                if data != 0 {
+                    let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
                     out[ix] = Some((color as u8, (color >> 8) as u8));
                 }
             } else {
@@ -558,7 +556,7 @@ impl PPU {
     }
 
     fn get_affine_text_bg_scanline(&self, bg_n: usize) -> [Option<(u8, u8)>; 240] {
-        // TODO: Mosaic (?)
+        // TODO: Mosaic
         let mut out = [None; 240];
 
         let ctrl = &self.bg_control_regs[bg_n];
@@ -568,7 +566,6 @@ impl PPU {
             self.bg_aff_param_regs[bg_n - 2].2.signed_value(),
         );
 
-        let background_color = self.palette_ram.borrow_mut().read_u16(0);
         let map_base = ctrl.screen_block() as usize * 0x800;
 
         let (n_bg_cols, n_bg_rows) = match ctrl.size() {
@@ -611,10 +608,10 @@ impl PPU {
                     + (py as usize % 8) * 8
                     + (px as usize % 8),
             );
-            let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
             let visible_with_windows =
                 self.pixel_visible_with_windows(bg_n, ix as u16, self.scan_line as u16);
-            if color != background_color && visible_with_windows {
+            if data != 0 && visible_with_windows {
+                let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
                 out[ix as usize] = Some((color as u8, (color >> 8) as u8));
             }
         }
@@ -763,7 +760,6 @@ impl PPU {
                 0x20 // 2D
             };
 
-        let background_color = self.palette_ram.borrow_mut().read_u16(0);
         for col in 0..size.0 {
             let tile_n = row_start
                 + (if attrs.1.flip_h() {
@@ -792,20 +788,17 @@ impl PPU {
                             }))
                             % 0x18000,
                     );
-                    let color = self
-                        .palette_ram
-                        .borrow_mut()
-                        .read_u16(0x200 + 2 * (data as usize));
                     if y as usize + pixel_y < 160 {
                         let visible_with_windows = self.pixel_visible_with_windows(
                             4, // OBJ layer
                             pixel_x_offset as u16,
                             y + pixel_y as u16,
                         );
-                        if visible_with_windows
-                            && pixel_x_offset <= 239
-                            && color != background_color
-                        {
+                        if data != 0 && visible_with_windows && pixel_x_offset <= 239 {
+                            let color = self
+                                .palette_ram
+                                .borrow_mut()
+                                .read_u16(0x200 + 2 * (data as usize));
                             line_buf[pixel_x_offset as usize] =
                                 Some((attrs.2.priority(), (color as u8, (color >> 8) as u8)));
                         }
@@ -960,6 +953,7 @@ impl PPU {
                     continue;
                 }
 
+                // TODO: Transparency?
                 let color = self
                     .palette_ram
                     .borrow_mut()
