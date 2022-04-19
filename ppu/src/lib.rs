@@ -274,7 +274,6 @@ impl PPU {
         double_buffered: bool,
         full_palette_mode: bool,
     ) -> [Option<(u8, u8)>; 240] {
-        // TODO: Affine
         let mut out = [None; 240];
 
         let page_base = if double_buffered && self.lcd_control_reg.frame_select() {
@@ -283,24 +282,54 @@ impl PPU {
             0
         };
 
-        let y = self.scan_line as usize;
-        if small && (y >= 128) {
-            return out;
-        }
+        let (pa, pc) = (
+            self.bg_aff_param_regs[0].0.signed_value(),
+            self.bg_aff_param_regs[0].2.signed_value(),
+        );
 
         let width = if small { 160 } else { 240 };
-        for x in 0..width {
+        let height = if small { 128 } else { 160 };
+        for x in 0..240 {
+            let px = (self.bg_ref_internal[0].0 + pa * x as i32) >> 8;
+            let py = (self.bg_ref_internal[0].1 + pc * x as i32) >> 8;
+
+            if !self.bg_control_regs[2].display_overflow() && (px < 0 || py < 0) {
+                continue;
+            }
+
+            let (tex_x, tex_y) = {
+                let mut tex_x = px;
+                let mut tex_y = py;
+                if self.bg_control_regs[2].display_overflow() {
+                    tex_x = tex_x.rem_euclid(width as i32);
+                    tex_y = tex_y.rem_euclid(height as i32);
+                }
+                (tex_x as usize, tex_y as usize)
+            };
+
+            if tex_x >= width || tex_y >= height {
+                continue;
+            }
+
             let color = if full_palette_mode {
                 self.vram
                     .borrow_mut()
-                    .read_u16(page_base + 2 * (x + width * y))
+                    .read_u16(page_base + 2 * (tex_x + width * tex_y))
             } else {
-                let color_i = self.vram.borrow_mut().read(page_base + x + width * y);
+                let color_i = self
+                    .vram
+                    .borrow_mut()
+                    .read(page_base + tex_x + width * tex_y);
                 self.palette_ram
                     .borrow_mut()
                     .read_u16(2 * (color_i as usize))
             };
-            out[x] = Some((color as u8, (color >> 8) as u8));
+
+            let visible_with_windows =
+                self.pixel_visible_with_windows(2, x as u16, self.scan_line as u16);
+            if visible_with_windows {
+                out[x] = Some((color as u8, (color >> 8) as u8));
+            }
         }
         out
     }
@@ -497,6 +526,7 @@ impl PPU {
     // bg_n == 4 corresponds to the OBJ layer
     fn pixel_visible_with_windows(&self, bg_n: usize, x: u16, y: u16) -> bool {
         // FIXME: Partially offscreen windows don't work
+        // TODO: OBJ window
         let enabled_windows = {
             let mut windows = vec![];
             if self.lcd_control_reg.enable_win0() {
