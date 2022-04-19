@@ -467,24 +467,37 @@ impl PPU {
         let offset_x = (self.scroll_regs[bg_n].0.offset() as usize) % (n_bg_cols * 8);
         let offset_y = (self.scroll_regs[bg_n].1.offset() as usize) % (n_bg_rows * 8);
 
+        let (stretch_x, stretch_y) = if self.bg_control_regs[bg_n].mosaic() {
+            let reg = &self.mosaic_reg;
+            (reg.bg_h() as usize + 1, reg.bg_v() as usize + 1)
+        } else {
+            (1, 1)
+        };
         let adjusted_y = {
             let offset_line = self.scan_line as usize + offset_y;
-            let stretch_y = if self.bg_control_regs[bg_n].mosaic() {
-                self.mosaic_reg.bg_v() + 1
-            } else {
-                1
-            };
-            offset_line - (offset_line % stretch_y as usize)
+            offset_line - (offset_line % stretch_y)
         };
 
         let map_base = self.bg_control_regs[bg_n].screen_block() as usize * 0x800;
         let tile_row = (adjusted_y / 8) % n_bg_rows;
-        let first_tile_col = (offset_x / 8) % n_bg_cols;
-
         let row = adjusted_y % 8;
 
         let background_color = self.palette_ram.borrow_mut().read_u16(0);
-        for tile_col in first_tile_col..(first_tile_col + 31) {
+
+        for ix in 0..240 {
+            let visible_with_windows =
+                self.pixel_visible_with_windows(bg_n, ix as u16, self.scan_line as u16);
+            if !visible_with_windows {
+                continue;
+            }
+
+            let tex_x = {
+                let tex_x = offset_x + ix;
+                tex_x - (tex_x % stretch_x)
+            };
+            let tile_col = tex_x / 8;
+            let pixel_n = tex_x % 8;
+
             let screen_offset_x = if n_bg_cols == 64 && 31 < tile_col && tile_col < 64 {
                 0x800
             } else {
@@ -505,81 +518,38 @@ impl PPU {
             let flip_h = (map_entry >> 10) & 1 == 1;
             let flip_v = (map_entry >> 11) & 1 == 1;
             if full_palette_mode {
-                for byte_n in 0..8 {
-                    let pixel_x_offset = ((tile_col - first_tile_col) * 8 + byte_n) as isize
-                        - (offset_x as isize) % 8;
-                    let data = self.vram.borrow_mut().read(
-                        0x4000 * self.bg_control_regs[bg_n].char_block() as usize
-                            + 64 * tile_n as usize
-                            + (if flip_v { 7 - row } else { row }) * 8
-                            + (if flip_h { 7 - byte_n } else { byte_n }),
-                    );
-                    let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
-                    let visible_with_windows = self.pixel_visible_with_windows(
-                        bg_n,
-                        pixel_x_offset as u16,
-                        self.scan_line as u16,
-                    );
-                    if color != background_color
-                        && visible_with_windows
-                        && pixel_x_offset >= 0
-                        && pixel_x_offset <= 239
-                    {
-                        out[pixel_x_offset as usize] = Some((color as u8, (color >> 8) as u8));
-                    }
+                let data = self.vram.borrow_mut().read(
+                    0x4000 * self.bg_control_regs[bg_n].char_block() as usize
+                        + 64 * tile_n as usize
+                        + (if flip_v { 7 - row } else { row }) * 8
+                        + (if flip_h { 7 - pixel_n } else { pixel_n }),
+                );
+                let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
+                if color != background_color {
+                    out[ix] = Some((color as u8, (color >> 8) as u8));
                 }
             } else {
                 let palette_n = (map_entry >> 12) & 0b1111;
-                for byte_n in 0..4 {
-                    let pixel_x_offset = ((tile_col - first_tile_col) * 8 + 2 * byte_n) as isize
-                        - (offset_x as isize) % 8;
-                    let data = self.vram.borrow_mut().read(
-                        0x4000 * self.bg_control_regs[bg_n].char_block() as usize
-                            + 32 * tile_n as usize
-                            + (if flip_v { 7 - row } else { row }) * 4
-                            + (if flip_h { 3 - byte_n } else { byte_n }),
-                    );
-                    let color_i_left = data & 0b1111;
-                    let color_i_right = (data >> 4) & 0b1111;
-                    let (color_i_left, color_i_right) = if flip_h {
-                        (color_i_right, color_i_left)
-                    } else {
-                        (color_i_left, color_i_right)
-                    };
-                    let color_left = self
-                        .palette_ram
-                        .borrow_mut()
-                        .read_u16(2 * (palette_n as usize * 16 + color_i_left as usize));
-                    let color_right = self
-                        .palette_ram
-                        .borrow_mut()
-                        .read_u16(2 * (palette_n as usize * 16 + color_i_right as usize));
-                    let visible_with_windows = self.pixel_visible_with_windows(
-                        bg_n,
-                        pixel_x_offset as u16,
-                        self.scan_line as u16,
-                    );
-                    if color_i_left != 0
-                        && visible_with_windows
-                        && pixel_x_offset >= 0
-                        && pixel_x_offset <= 239
-                    {
-                        out[pixel_x_offset as usize] =
-                            Some((color_left as u8, (color_left >> 8) as u8));
-                    }
-                    let visible_with_windows = self.pixel_visible_with_windows(
-                        bg_n,
-                        (pixel_x_offset as u16).wrapping_add(1),
-                        self.scan_line as u16,
-                    );
-                    if color_i_right != 0
-                        && visible_with_windows
-                        && pixel_x_offset >= -1
-                        && (pixel_x_offset + 1) <= 239
-                    {
-                        out[(pixel_x_offset + 1) as usize] =
-                            Some((color_right as u8, (color_right >> 8) as u8));
-                    }
+                let byte_n = pixel_n / 2;
+                let is_left = (pixel_n % 2) == 0;
+                let data = self.vram.borrow_mut().read(
+                    0x4000 * self.bg_control_regs[bg_n].char_block() as usize
+                        + 32 * tile_n as usize
+                        + (if flip_v { 7 - row } else { row }) * 4
+                        + (if flip_h { 3 - byte_n } else { byte_n }),
+                );
+                let color_i = if is_left ^ flip_h {
+                    data & 0b1111
+                } else {
+                    (data >> 4) & 0b1111
+                };
+                let color = self
+                    .palette_ram
+                    .borrow_mut()
+                    .read_u16(2 * (palette_n as usize * 16 + color_i as usize));
+
+                if color_i != 0 {
+                    out[ix] = Some((color as u8, (color >> 8) as u8));
                 }
             }
         }
@@ -588,6 +558,7 @@ impl PPU {
     }
 
     fn get_affine_text_bg_scanline(&self, bg_n: usize) -> [Option<(u8, u8)>; 240] {
+        // TODO: Mosaic (?)
         let mut out = [None; 240];
 
         let ctrl = &self.bg_control_regs[bg_n];
