@@ -8,8 +8,8 @@ use obj_attrs::*;
 use registers::*;
 
 use std::cell::RefCell;
-use std::iter;
 use std::rc::Rc;
+use std::{cmp, iter};
 
 use memory::Memory;
 
@@ -234,13 +234,23 @@ impl PPU {
         let sprite_line = self.get_sprite_scanline();
 
         let first_pixel_i = 480 * self.scan_line as usize;
-        let backdrop_pixel = {
+        let backdrop_color = {
             let backdrop_color = self.palette_ram.borrow_mut().read_u16(0);
+            ((backdrop_color & 0xFF) as u8, (backdrop_color >> 8) as u8)
+        };
+        let backdrop_pixel = {
             (
                 (4, 5), // Backdrop has lower priority than any layer, and is "layer 5" in blending
-                ((backdrop_color & 0xFF) as u8, (backdrop_color >> 8) as u8),
+                backdrop_color,
             )
         };
+
+        let blend_mode = self.blend_control_reg.mode();
+        let blend_source_mask = self.blend_control_reg.lo_byte() & 0b111111;
+        let blend_target_mask = self.blend_control_reg.hi_byte() & 0b111111;
+        let eva = self.blend_alpha_reg.eva();
+        let evb = self.blend_alpha_reg.evb();
+
         for i in 0..240 {
             let bg_pixels = lines
                 .iter()
@@ -258,9 +268,66 @@ impl PPU {
             });
             pixels.push(backdrop_pixel);
 
+            let color = match blend_mode {
+                0b00 => pixels[0].1, // No blending
+                0b01 => {
+                    // Alpha blending
+                    let mut candidates = pixels.into_iter().map(|((_, layer_n), color)| {
+                        let is_source = (blend_source_mask >> layer_n) & 1 == 1;
+                        let is_target = (blend_target_mask >> layer_n) & 1 == 1;
+                        ((is_source, is_target), color)
+                    });
+                    let top = candidates.next();
+                    if let Some(top) = top {
+                        if !(top.0).0 {
+                            top.1 // If the topmost pixel is not a source pixel, blending does not occur
+                        } else {
+                            let bottom = candidates
+                                .next()
+                                .and_then(|bottom| (bottom.0).1.then(|| bottom));
+                            if let Some(bottom) = bottom {
+                                // Blend
+                                let top_color = (((top.1).1 as u16) << 8) | ((top.1).0 as u16);
+                                let (ar, ag, ab) = (
+                                    (top_color >> 10) & 0x1F,
+                                    (top_color >> 5) & 0x1F,
+                                    top_color & 0x1F,
+                                );
+                                let bot_color =
+                                    (((bottom.1).1 as u16) << 8) | ((bottom.1).0 as u16);
+                                let (br, bg, bb) = (
+                                    (bot_color >> 10) & 0x1F,
+                                    (bot_color >> 5) & 0x1F,
+                                    bot_color & 0x1F,
+                                );
+                                let (cr, cg, cb) = (
+                                    cmp::min((ar * eva + br * evb) >> 4, 31),
+                                    cmp::min((ag * eva + bg * evb) >> 4, 31),
+                                    cmp::min((ab * eva + bb * evb) >> 4, 31),
+                                );
+                                let blended = (cr << 10) | (cg << 5) | cb;
+                                ((blended & 0xFF) as u8, (blended >> 8) as u8)
+                            } else {
+                                top.1
+                            }
+                        }
+                    } else {
+                        backdrop_color
+                    }
+                }
+                0b10 => {
+                    // Fade to white
+                    pixels[0].1 // TODO
+                }
+                0b11 | _ => {
+                    // Fade to black
+                    pixels[0].1 // TODO
+                }
+            };
+
             let pixel_i = first_pixel_i + 2 * i;
-            self.framebuffer[pixel_i + 0] = (pixels[0].1).0;
-            self.framebuffer[pixel_i + 1] = (pixels[0].1).1;
+            self.framebuffer[pixel_i + 0] = color.0;
+            self.framebuffer[pixel_i + 1] = color.1;
         }
     }
 
