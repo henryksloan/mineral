@@ -250,6 +250,7 @@ impl PPU {
         let blend_target_mask = self.blend_control_reg.hi_byte() & 0b111111;
         let eva = self.blend_alpha_reg.eva();
         let evb = self.blend_alpha_reg.evb();
+        let ey = self.blend_fade_reg.ey();
 
         for i in 0..240 {
             let bg_pixels = lines
@@ -287,6 +288,7 @@ impl PPU {
                                 .and_then(|bottom| (bottom.0).1.then(|| bottom));
                             if let Some(bottom) = bottom {
                                 // Blend
+                                // TODO: Refactor to a function so it can be reused for black and white blending
                                 let top_color = (((top.1).1 as u16) << 8) | ((top.1).0 as u16);
                                 let (ar, ag, ab) = (
                                     (top_color >> 10) & 0x1F,
@@ -317,11 +319,62 @@ impl PPU {
                 }
                 0b10 => {
                     // Fade to white
-                    pixels[0].1 // TODO
+                    let mut candidates = pixels.into_iter().map(|((_, layer_n), color)| {
+                        let is_source = (blend_source_mask >> layer_n) & 1 == 1;
+                        (is_source, color)
+                    });
+                    let top = candidates.next();
+                    if let Some(top) = top {
+                        if !top.0 {
+                            top.1 // If the topmost pixel is not a source pixel, blending does not occur
+                        } else {
+                            let top_color = (((top.1).1 as u16) << 8) | ((top.1).0 as u16);
+                            let (ar, ag, ab) = (
+                                (top_color >> 10) & 0x1F,
+                                (top_color >> 5) & 0x1F,
+                                top_color & 0x1F,
+                            );
+                            let fade_value = 0x1F * ey;
+                            let (cr, cg, cb) = (
+                                cmp::min((ar * (16 - ey) + fade_value) >> 4, 31),
+                                cmp::min((ag * (16 - ey) + fade_value) >> 4, 31),
+                                cmp::min((ab * (16 - ey) + fade_value) >> 4, 31),
+                            );
+                            let blended = (cr << 10) | (cg << 5) | cb;
+                            ((blended & 0xFF) as u8, (blended >> 8) as u8)
+                        }
+                    } else {
+                        backdrop_color
+                    }
                 }
                 0b11 | _ => {
                     // Fade to black
-                    pixels[0].1 // TODO
+                    let mut candidates = pixels.into_iter().map(|((_, layer_n), color)| {
+                        let is_source = (blend_source_mask >> layer_n) & 1 == 1;
+                        (is_source, color)
+                    });
+                    let top = candidates.next();
+                    if let Some(top) = top {
+                        if !top.0 {
+                            top.1 // If the topmost pixel is not a source pixel, blending does not occur
+                        } else {
+                            let top_color = (((top.1).1 as u16) << 8) | ((top.1).0 as u16);
+                            let (ar, ag, ab) = (
+                                (top_color >> 10) & 0x1F,
+                                (top_color >> 5) & 0x1F,
+                                top_color & 0x1F,
+                            );
+                            let (cr, cg, cb) = (
+                                cmp::min((ar * (16 - ey)) >> 4, 31),
+                                cmp::min((ag * (16 - ey)) >> 4, 31),
+                                cmp::min((ab * (16 - ey)) >> 4, 31),
+                            );
+                            let blended = (cr << 10) | (cg << 5) | cb;
+                            ((blended & 0xFF) as u8, (blended >> 8) as u8)
+                        }
+                    } else {
+                        backdrop_color
+                    }
                 }
             };
 
