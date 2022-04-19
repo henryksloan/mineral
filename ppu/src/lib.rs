@@ -29,6 +29,7 @@ pub struct PPU {
     bg_ref_regs: [(BgRefReg, BgRefReg); 2],
     bg_aff_param_regs: [(BgAffParamReg, BgAffParamReg, BgAffParamReg, BgAffParamReg); 2],
 
+    mosaic_reg: MosaicReg,
     blend_control_reg: BlendControlReg,
     blend_alpha_reg: BlendAlphaReg,
     blend_fade_reg: BlendFadeReg,
@@ -89,6 +90,7 @@ impl PPU {
                 ),
             ],
 
+            mosaic_reg: MosaicReg(0),
             blend_control_reg: BlendControlReg(0),
             blend_alpha_reg: BlendAlphaReg(0),
             blend_fade_reg: BlendFadeReg(0),
@@ -390,6 +392,7 @@ impl PPU {
         double_buffered: bool,
         full_palette_mode: bool,
     ) -> [Option<(u8, u8)>; 240] {
+        // TODO: Mosaic
         let mut out = [None; 240];
 
         let page_base = if double_buffered && self.lcd_control_reg.frame_select() {
@@ -464,11 +467,21 @@ impl PPU {
         let offset_x = (self.scroll_regs[bg_n].0.offset() as usize) % (n_bg_cols * 8);
         let offset_y = (self.scroll_regs[bg_n].1.offset() as usize) % (n_bg_rows * 8);
 
+        let adjusted_y = {
+            let offset_line = self.scan_line as usize + offset_y;
+            let stretch_y = if self.bg_control_regs[bg_n].mosaic() {
+                self.mosaic_reg.bg_v() + 1
+            } else {
+                1
+            };
+            offset_line - (offset_line % stretch_y as usize)
+        };
+
         let map_base = self.bg_control_regs[bg_n].screen_block() as usize * 0x800;
-        let tile_row = ((self.scan_line as usize + offset_y) / 8) % n_bg_rows;
+        let tile_row = (adjusted_y / 8) % n_bg_rows;
         let first_tile_col = (offset_x / 8) % n_bg_cols;
 
-        let row = (self.scan_line as usize + offset_y) % 8;
+        let row = adjusted_y % 8;
 
         let background_color = self.palette_ram.borrow_mut().read_u16(0);
         for tile_col in first_tile_col..(first_tile_col + 31) {
@@ -1163,6 +1176,8 @@ impl Memory for PPU {
             0x04A => self.win_outside.set_lo_byte(data),
             0x04B => self.win_outside.set_hi_byte(data),
 
+            0x4C => self.mosaic_reg.set_lo_byte(data),
+            0x4D => self.mosaic_reg.set_hi_byte(data),
             0x50 => self.blend_control_reg.set_lo_byte(data),
             0x51 => self.blend_control_reg.set_hi_byte(data),
             0x52 => self.blend_alpha_reg.set_lo_byte(data),
