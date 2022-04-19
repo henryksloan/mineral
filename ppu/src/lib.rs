@@ -8,6 +8,7 @@ use obj_attrs::*;
 use registers::*;
 
 use std::cell::RefCell;
+use std::iter;
 use std::rc::Rc;
 
 use memory::Memory;
@@ -225,46 +226,41 @@ impl PPU {
             ],
             _ => panic!("illegal video mode: {}", self.lcd_control_reg.bg_mode()),
         };
-        let mut lines = (0..4)
+        let lines = (0..4)
             .filter(|&i| bgs_enabled[i])
             .map(|i| ((self.bg_control_regs[i].priority(), i), bg_lines[i]))
             .filter_map(|(prio_i, line_opt)| line_opt.map(|line| (prio_i, line)))
             .collect::<Vec<((u16, usize), [Option<(u8, u8)>; 240])>>();
-        lines.sort_by_key(|tuple| tuple.0);
         let sprite_line = self.get_sprite_scanline();
 
         let first_pixel_i = 480 * self.scan_line as usize;
+        let backdrop_pixel = {
+            let backdrop_color = self.palette_ram.borrow_mut().read_u16(0);
+            (
+                (4, 5), // Backdrop has lower priority than any layer, and is "layer 5" in blending
+                ((backdrop_color & 0xFF) as u8, (backdrop_color >> 8) as u8),
+            )
+        };
         for i in 0..240 {
-            // If no BG pixel is found, this value ensures a sprite pixel can be picked
-            let mut bg_prio = 4;
-            let mut found_pixel = false;
-            let mut color = (0, 0);
-            for line in &lines {
-                if let Some(pixel_color) = line.1[i] {
-                    color.0 = pixel_color.0;
-                    color.1 = pixel_color.1;
-                    bg_prio = (line.0).0 as u16;
-                    found_pixel = true;
-                    break;
-                }
-            }
-
-            if let Some((sprite_prio, sprite_color)) = sprite_line[i] {
-                if sprite_prio <= bg_prio {
-                    color = sprite_color;
-                    found_pixel = true;
-                }
-            }
+            let bg_pixels = lines
+                .iter()
+                .filter_map(|line| line.1[i].map(|color| (line.0, color)));
+            let mut pixels: Vec<((u16, usize), (u8, u8))> =
+                if let Some((sprite_prio, sprite_color)) = sprite_line[i] {
+                    iter::once(((sprite_prio, 4), sprite_color)) // OBJ are "layer 4" in blending
+                        .chain(bg_pixels)
+                        .collect()
+                } else {
+                    bg_pixels.collect()
+                };
+            pixels.sort_by_key(|((prio, layer), _)| {
+                (*prio, if *layer == 4 { 0 } else { *layer }) // Sprites of priority X are on top of of layer X
+            });
+            pixels.push(backdrop_pixel);
 
             let pixel_i = first_pixel_i + 2 * i;
-            if found_pixel {
-                self.framebuffer[pixel_i + 0] = color.0;
-                self.framebuffer[pixel_i + 1] = color.1;
-            } else {
-                let color = self.palette_ram.borrow_mut().read_u16(0);
-                self.framebuffer[pixel_i + 0] = (color & 0xFF) as u8;
-                self.framebuffer[pixel_i + 1] = (color >> 8) as u8;
-            }
+            self.framebuffer[pixel_i + 0] = (pixels[0].1).0;
+            self.framebuffer[pixel_i + 1] = (pixels[0].1).1;
         }
     }
 
