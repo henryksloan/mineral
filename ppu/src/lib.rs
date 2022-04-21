@@ -249,9 +249,9 @@ impl PPU {
         let blend_mode = self.blend_control_reg.mode();
         let blend_source_mask = self.blend_control_reg.lo_byte() & 0b111111;
         let blend_target_mask = self.blend_control_reg.hi_byte() & 0b111111;
-        let eva = self.blend_alpha_reg.eva();
-        let evb = self.blend_alpha_reg.evb();
-        let ey = self.blend_fade_reg.ey();
+        let eva = self.blend_alpha_reg.eva().min(16);
+        let evb = self.blend_alpha_reg.evb().min(16);
+        let ey = self.blend_fade_reg.ey().min(16);
 
         for i in 0..240 {
             let bg_pixels = lines
