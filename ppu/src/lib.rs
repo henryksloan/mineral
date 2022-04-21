@@ -66,33 +66,15 @@ impl PPU {
             lcd_control_reg: LcdControlReg(0),
             lcd_status_reg: LcdStatusReg(0),
 
-            bg_control_regs: [
-                BgControlReg(0),
-                BgControlReg(0),
-                BgControlReg(0),
-                BgControlReg(0),
-            ],
-            scroll_regs: [
-                (ScrollReg(0), ScrollReg(0)),
-                (ScrollReg(0), ScrollReg(0)),
-                (ScrollReg(0), ScrollReg(0)),
-                (ScrollReg(0), ScrollReg(0)),
-            ],
-            bg_ref_regs: [(BgRefReg(0), BgRefReg(0)), (BgRefReg(0), BgRefReg(0))],
-            bg_aff_param_regs: [
-                (
-                    BgAffParamReg(0),
-                    BgAffParamReg(0),
-                    BgAffParamReg(0),
-                    BgAffParamReg(0),
-                ),
-                (
-                    BgAffParamReg(0),
-                    BgAffParamReg(0),
-                    BgAffParamReg(0),
-                    BgAffParamReg(0),
-                ),
-            ],
+            bg_control_regs: [BgControlReg(0); 4],
+            scroll_regs: [(ScrollReg(0), ScrollReg(0)); 4],
+            bg_ref_regs: [(BgRefReg(0), BgRefReg(0)); 2],
+            bg_aff_param_regs: [(
+                BgAffParamReg(0),
+                BgAffParamReg(0),
+                BgAffParamReg(0),
+                BgAffParamReg(0),
+            ); 2],
 
             mosaic_reg: MosaicReg(0),
             blend_control_reg: BlendControlReg(0),

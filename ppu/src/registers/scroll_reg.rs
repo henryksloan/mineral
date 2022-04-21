@@ -1,6 +1,7 @@
 bitfield! {
   /// 400001Xh - BG{0,1,2,3}{H,V}OFS
   /// Sets a background's X and Y offset
+  #[derive(Clone, Copy)]
   pub struct ScrollReg(u16);
   impl Debug;
   pub offset, _: 8, 0;
