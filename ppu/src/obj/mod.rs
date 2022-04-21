@@ -163,6 +163,15 @@ impl PPU {
             (attrs.1.flip_v(), attrs.1.flip_h())
         };
 
+        let (stretch_x, stretch_y) = if attrs.0.mosaic() {
+            let reg = &self.mosaic_reg;
+            (reg.obj_h() as usize + 1, reg.obj_v() as usize + 1)
+        } else {
+            (1, 1)
+        };
+
+        let (row, col) = (row - (row % stretch_y), col - (col % stretch_x));
+
         let tile_row = if flip_v {
             (n_rows as usize - 1) - (row / 8)
         } else {
