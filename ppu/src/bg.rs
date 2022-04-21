@@ -213,7 +213,6 @@ impl PPU {
                 (tile_col as usize, tile_row as usize)
             };
 
-            // TODO: Can we break in one of these cases?
             if tile_col >= n_bg_cols || tile_row >= n_bg_rows {
                 continue;
             }

@@ -212,7 +212,6 @@ impl PPU {
         let pixel_row = if flip_v { 7 - (row % 8) } else { row % 8 };
         let pixel_col = if flip_h { 7 - (col % 8) } else { col % 8 };
 
-        // TODO: Figure out how to make these modulus unnecessary
         let color_i = if full_palette_mode {
             self.vram
                 .borrow_mut()
