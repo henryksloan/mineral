@@ -143,11 +143,15 @@ impl PPU {
 
         if self.scan_cycle == 1231 {
             if self.scan_line < 160 {
+                // At the end of HBLANK on visible lines, the internal BG reference point registers
+                // are incremented by pb and pd, respectively
                 for i in 0..2 {
                     self.bg_ref_internal[i].0 += self.bg_aff_param_regs[i].1.signed_value();
                     self.bg_ref_internal[i].1 += self.bg_aff_param_regs[i].3.signed_value();
                 }
             } else {
+                // At the end of HBLANK on VBLANK lines, the internal reference point registers are
+                // reloaded
                 for i in 0..2 {
                     self.bg_ref_internal[i] = (
                         self.bg_ref_regs[i].0.signed_value(),
@@ -241,6 +245,7 @@ impl PPU {
         let ey = self.blend_fade_reg.ey().min(16);
 
         for i in 0..240 {
+            // TODO: Semi-transparent sprites
             // Into `pixels`, place the non-transparent pixels at this dot in order of priority
             let bg_pixels = lines
                 .iter()

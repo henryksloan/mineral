@@ -23,14 +23,9 @@ impl PPU {
         };
 
         for sprite_n in priority_order.into_iter() {
-            let oam_addr = 8 * sprite_n;
-            let attr0 = ObjAttr0(self.oam.borrow_mut().read_u16(oam_addr + 0));
-            let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
-            let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
-            let attrs = ObjAttrs(attr0, attr1, attr2);
+            let attrs = self.get_obj_attrs(sprite_n);
 
-            // Don't draw OBJ window masks
-            if attrs.0.mode() == 0b10 {
+            if matches!(attrs.0.mode(), ObjMode::Window) {
                 continue;
             }
 
@@ -45,21 +40,15 @@ impl PPU {
     }
 
     pub(super) fn get_obj_win_scanline(&self) -> [bool; 240] {
-        let mut out = [None; 240];
-
         if !self.lcd_control_reg.enable_obj() || !self.lcd_control_reg.enable_winobj() {
-            return out.map(|pixel| pixel.is_some());
+            return [false; 240];
         }
 
+        let mut out = [None; 240];
         for sprite_n in 0..128 {
-            let oam_addr = 8 * sprite_n;
-            let attr0 = ObjAttr0(self.oam.borrow_mut().read_u16(oam_addr + 0));
-            let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
-            let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
-            let attrs = ObjAttrs(attr0, attr1, attr2);
+            let attrs = self.get_obj_attrs(sprite_n);
 
-            // Only draw OBJ window masks
-            if attrs.0.mode() != 0b10 {
+            if !matches!(attrs.0.mode(), ObjMode::Window) {
                 continue;
             }
 
@@ -254,5 +243,13 @@ impl PPU {
         } else {
             None
         }
+    }
+
+    fn get_obj_attrs(&self, sprite_n: usize) -> ObjAttrs {
+        let oam_addr = 8 * sprite_n;
+        let attr0 = ObjAttr0(self.oam.borrow_mut().read_u16(oam_addr + 0));
+        let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
+        let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
+        ObjAttrs(attr0, attr1, attr2)
     }
 }

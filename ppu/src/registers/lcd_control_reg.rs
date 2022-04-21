@@ -3,7 +3,7 @@ bitfield! {
   /// Sets global rules and flags for rendering
   pub struct LcdControlReg(u16);
   impl Debug;
-  pub bg_mode, _: 2, 0; // TODO: convert into enum
+  pub bg_mode, _: 2, 0;
   cgb_mode, _ : 3;
   pub frame_select, _: 4;
   pub hblank_free, _: 5;
