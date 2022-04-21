@@ -41,13 +41,32 @@ bitfield! {
   // Double size in affine mode, disable in normal mode
   pub double_size, _: 9;
   pub disable, _: 9;
-  pub mode, _: 11, 10;
+  pub into ObjMode, mode, _: 11, 10;
   pub mosaic, _: 12;
   pub colors, _: 13;
   pub shape, _: 15, 14;
 
   pub u8, lo_byte, set_lo_byte: 7, 0;
   pub u8, hi_byte, set_hi_byte: 15, 8;
+}
+
+#[derive(PartialEq, Debug)]
+pub enum ObjMode {
+    Normal,
+    SemiTransparent,
+    Window,
+    Prohibited,
+}
+
+impl From<u16> for ObjMode {
+    fn from(val: u16) -> Self {
+        match val {
+            0b00 => Self::Normal,
+            0b01 => Self::SemiTransparent,
+            0b10 => Self::Window,
+            _ => Self::Prohibited,
+        }
+    }
 }
 
 bitfield! {

@@ -1,6 +1,7 @@
 bitfield! {
   /// 40000{2,3}{8,C}h - BG{2,3}{X,Y}
   /// Sets the reference point of an affine background
+  #[derive(Clone, Copy)]
   pub struct BgRefReg(u32);
   impl Debug;
   pub fraction, _: 7, 0;

@@ -1,6 +1,7 @@
 bitfield! {
   /// 4000008h, 400000Ah, 400000Ch, 400000Eh - BG{0,1,2,3}CNT
   /// Configures a particular background
+  #[derive(Clone, Copy)]
   pub struct BgControlReg(u16);
   impl Debug;
   pub priority, _: 1, 0;
