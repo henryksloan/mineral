@@ -136,37 +136,37 @@ impl PPU {
             if (tex_x >= 0 && tex_x < size.0 as i32 * 8)
                 && (tex_y >= 0 && tex_y < size.1 as i32 * 8)
             {
-                let row = tex_y as u16 / 8;
-                let row_start = attrs.2.tile()
-                    + row
-                        * if self.lcd_control_reg.obj_char_mapping() {
-                            size.0 * bytes_per_tile // 1D
-                        } else {
-                            0x20 // 2D
-                        };
-                let col = tex_x as u16 / 8;
-                let tile_n = row_start + col * bytes_per_tile;
+                // let row = tex_y as u16 / 8;
+                // let row_start = attrs.2.tile()
+                //     + row
+                //         * if self.lcd_control_reg.obj_char_mapping() {
+                //             size.0 * bytes_per_tile // 1D
+                //         } else {
+                //             0x20 // 2D
+                //         };
+                // let col = tex_x as u16 / 8;
+                // let tile_n = row_start + col * bytes_per_tile;
 
-                let pixel_y = tex_y as usize % 8;
-                let byte_n = ((tex_x as usize) / 2) % 4;
-                let data = self.vram.borrow_mut().read(
-                    (0x4000 * 4 + 32 * tile_n as usize + pixel_y * 4 + (byte_n as usize)) % 0x18000,
-                );
+                // let pixel_y = tex_y as usize % 8;
+                // let byte_n = ((tex_x as usize) / 2) % 4;
+                // let data = self.vram.borrow_mut().read(
+                //     (0x4000 * 4 + 32 * tile_n as usize + pixel_y * 4 + (byte_n as usize)) % 0x18000,
+                // );
 
-                let color_i = match tex_x % 2 {
-                    0 => data & 0b1111,            // Left pixel
-                    1 | _ => (data >> 4) & 0b1111, // Right pixel
-                } as usize;
+                // let color_i = match tex_x % 2 {
+                //     0 => data & 0b1111,            // Left pixel
+                //     1 | _ => (data >> 4) & 0b1111, // Right pixel
+                // } as usize;
 
-                if color_i == 0 {
-                    continue;
-                }
+                // if color_i == 0 {
+                //     continue;
+                // }
 
-                // TODO: Transparency?
-                let color = self
-                    .palette_ram
-                    .borrow_mut()
-                    .read_u16(0x200 + 2 * (attrs.2.palette() as usize * 16 + color_i));
+                // // TODO: Transparency?
+                // let color = self
+                //     .palette_ram
+                //     .borrow_mut()
+                //     .read_u16(0x200 + 2 * (attrs.2.palette() as usize * 16 + color_i));
 
                 let visible_with_windows = self.pixel_visible_with_windows(
                     4, // OBJ layer
@@ -174,8 +174,13 @@ impl PPU {
                     y as u16,
                 );
                 if visible_with_windows {
-                    line_buf[screen_x as usize] =
-                        Some((attrs.2.priority(), (color as u8, (color >> 8) as u8)));
+                    // line_buf[screen_x as usize] =
+                    //     Some((attrs.2.priority(), (color as u8, (color >> 8) as u8)));
+                    if let Some(pixel) =
+                        self.get_sprite_pixel(&attrs, tex_y as usize, tex_x as usize)
+                    {
+                        line_buf[screen_x as usize] = Some(pixel);
+                    }
                 }
             }
         }
@@ -191,8 +196,13 @@ impl PPU {
         let bytes_per_tile = if full_palette_mode { 2 } else { 1 };
 
         let (n_cols, n_rows) = attrs.size();
+        let (flip_v, flip_h) = if attrs.0.affine() {
+            (false, false)
+        } else {
+            (attrs.1.flip_v(), attrs.1.flip_h())
+        };
 
-        let tile_row = if attrs.1.flip_v() {
+        let tile_row = if flip_v {
             (n_rows as usize - 1) - (row / 8)
         } else {
             row / 8
@@ -206,7 +216,7 @@ impl PPU {
             attrs.2.tile() as usize + tile_row * distance_between_rows
         };
 
-        let tile_col = if attrs.1.flip_h() {
+        let tile_col = if flip_h {
             (n_cols as usize - 1) - (col / 8)
         } else {
             col / 8
@@ -214,16 +224,8 @@ impl PPU {
         let tile_n = tile_row_start + tile_col * bytes_per_tile;
 
         let tile_start = 0x4000 * 4 + 32 * tile_n as usize; // Sprites start in charblock 4
-        let pixel_row = if attrs.1.flip_v() {
-            7 - (row % 8)
-        } else {
-            row % 8
-        };
-        let pixel_col = if attrs.1.flip_h() {
-            7 - (col % 8)
-        } else {
-            col % 8
-        };
+        let pixel_row = if flip_v { 7 - (row % 8) } else { row % 8 };
+        let pixel_col = if flip_h { 7 - (col % 8) } else { col % 8 };
 
         // TODO: Figure out how to make these modulus unnecessary
         let color_i = if full_palette_mode {
@@ -231,7 +233,6 @@ impl PPU {
                 .borrow_mut()
                 .read((tile_start + (8 * pixel_row) + pixel_col) % 0x18000)
         } else {
-            // TODO: Check whether this division by two is correct for 4bpp
             let color_i_pair = self
                 .vram
                 .borrow_mut()
@@ -244,10 +245,15 @@ impl PPU {
         };
 
         if color_i != 0 {
+            let palette_start = if full_palette_mode {
+                0
+            } else {
+                attrs.2.palette() as usize * 16
+            };
             let color = self
                 .palette_ram
                 .borrow_mut()
-                .read_u16(0x200 + 2 * (color_i as usize));
+                .read_u16(0x200 + 2 * (palette_start + color_i as usize));
             Some((attrs.2.priority(), (color as u8, (color >> 8) as u8)))
         } else {
             None
