@@ -29,6 +29,11 @@ impl PPU {
             let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
             let attrs = ObjAttrs(attr0, attr1, attr2);
 
+            // Don't draw OBJ window masks
+            if attrs.0.mode() == 0b10 {
+                continue;
+            }
+
             if attrs.0.affine() {
                 self.render_affine_sprite_scanline(&mut out, attrs);
             } else {
@@ -37,6 +42,35 @@ impl PPU {
         }
 
         out
+    }
+
+    pub(super) fn get_obj_win_scanline(&self) -> [bool; 240] {
+        let mut out = [None; 240];
+
+        if !self.lcd_control_reg.enable_obj() || !self.lcd_control_reg.enable_winobj() {
+            return out.map(|pixel| pixel.is_some());
+        }
+
+        for sprite_n in 0..128 {
+            let oam_addr = 8 * sprite_n;
+            let attr0 = ObjAttr0(self.oam.borrow_mut().read_u16(oam_addr + 0));
+            let attr1 = ObjAttr1(self.oam.borrow_mut().read_u16(oam_addr + 2));
+            let attr2 = ObjAttr2(self.oam.borrow_mut().read_u16(oam_addr + 4));
+            let attrs = ObjAttrs(attr0, attr1, attr2);
+
+            // Only draw OBJ window masks
+            if attrs.0.mode() != 0b10 {
+                continue;
+            }
+
+            if attrs.0.affine() {
+                self.render_affine_sprite_scanline(&mut out, attrs);
+            } else {
+                self.render_regular_sprite_scanline(&mut out, attrs);
+            }
+        }
+
+        out.map(|pixel| pixel.is_some())
     }
 
     fn render_regular_sprite_scanline(
@@ -71,11 +105,7 @@ impl PPU {
                 x as usize
             };
 
-            let visible_with_windows = self.pixel_visible_with_windows(
-                4, // OBJ layer
-                x as u16,
-                self.scan_line as u16,
-            );
+            let visible_with_windows = self.win_mask_bufs[x][4];
             if visible_with_windows {
                 if let Some(pixel) = self.get_sprite_pixel(&attrs, row, col) {
                     line_buf[x] = Some(pixel);
@@ -131,11 +161,7 @@ impl PPU {
             if (tex_x >= 0 && tex_x < size.0 as i32 * 8)
                 && (tex_y >= 0 && tex_y < size.1 as i32 * 8)
             {
-                let visible_with_windows = self.pixel_visible_with_windows(
-                    4, // OBJ layer
-                    screen_x as u16 + 1,
-                    y as u16,
-                );
+                let visible_with_windows = self.win_mask_bufs[screen_x as usize][4];
                 if visible_with_windows {
                     if let Some(pixel) =
                         self.get_sprite_pixel(&attrs, tex_y as usize, tex_x as usize)

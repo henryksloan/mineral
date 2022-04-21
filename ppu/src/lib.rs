@@ -3,6 +3,7 @@ extern crate bitfield;
 
 mod obj;
 mod registers;
+mod win;
 
 use registers::*;
 
@@ -39,6 +40,9 @@ pub struct PPU {
     win_outside: WinOutsideControlReg,
 
     bg_ref_internal: [(i32, i32); 2],
+    // Stores whether the pixels of the current scanline are visible with windows
+    // The array elements are: BG 0-3, OBJ, Blend
+    win_mask_bufs: [[bool; 6]; 240],
 
     framebuffer: [u8; 240 * 160 * 2],
     frame_ready: bool,
@@ -100,6 +104,7 @@ impl PPU {
             win_outside: WinOutsideControlReg(0),
 
             bg_ref_internal: [(0, 0); 2],
+            win_mask_bufs: [[false; 6]; 240],
 
             framebuffer: [0; 240 * 160 * 2],
             frame_ready: false,
@@ -182,6 +187,8 @@ impl PPU {
     }
 
     fn draw_scanline(&mut self) {
+        self.update_win_masks_buf();
+
         let bgs_enabled = [
             self.lcd_control_reg.enable_bg0(),
             self.lcd_control_reg.enable_bg1(),
@@ -270,7 +277,14 @@ impl PPU {
             });
             pixels.push(backdrop_pixel);
 
-            let color = match blend_mode {
+            let inside_blend_window = self.win_mask_bufs[i][5];
+            let windowed_blend_mode = if inside_blend_window {
+                blend_mode
+            } else {
+                0b00
+            };
+
+            let color = match windowed_blend_mode {
                 0b00 => pixels[0].1, // No blending
                 0b01 => {
                     // Alpha blending
@@ -408,6 +422,11 @@ impl PPU {
         let width = if small { 160 } else { 240 };
         let height = if small { 128 } else { 160 };
         for x in 0..240 {
+            let visible_with_windows = self.win_mask_bufs[x][2];
+            if !visible_with_windows {
+                continue;
+            }
+
             let px = (self.bg_ref_internal[0].0 + pa * x as i32) >> 8;
             let py = (self.bg_ref_internal[0].1 + pc * x as i32) >> 8;
 
@@ -443,11 +462,7 @@ impl PPU {
                     .read_u16(2 * (color_i as usize))
             };
 
-            let visible_with_windows =
-                self.pixel_visible_with_windows(2, x as u16, self.scan_line as u16);
-            if visible_with_windows {
-                out[x] = Some((color as u8, (color >> 8) as u8));
-            }
+            out[x] = Some((color as u8, (color >> 8) as u8));
         }
         out
     }
@@ -482,8 +497,7 @@ impl PPU {
         let row = adjusted_y % 8;
 
         for ix in 0..240 {
-            let visible_with_windows =
-                self.pixel_visible_with_windows(bg_n, ix as u16, self.scan_line as u16);
+            let visible_with_windows = self.win_mask_bufs[ix][bg_n];
             if !visible_with_windows {
                 continue;
             }
@@ -575,6 +589,11 @@ impl PPU {
         };
 
         for ix in 0..240 {
+            let visible_with_windows = self.win_mask_bufs[ix as usize][bg_n];
+            if !visible_with_windows {
+                continue;
+            }
+
             let px = (self.bg_ref_internal[bg_n - 2].0 + pa * ix) >> 8;
             let py = (self.bg_ref_internal[bg_n - 2].1 + pc * ix) >> 8;
 
@@ -607,81 +626,13 @@ impl PPU {
                     + (py as usize % 8) * 8
                     + (px as usize % 8),
             );
-            let visible_with_windows =
-                self.pixel_visible_with_windows(bg_n, ix as u16, self.scan_line as u16);
-            if data != 0 && visible_with_windows {
+            if data != 0 {
                 let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
                 out[ix as usize] = Some((color as u8, (color >> 8) as u8));
             }
         }
 
         out
-    }
-
-    // Checks whether the given pixel coordinate is visible within the enabled windows.
-    // bg_n == 4 corresponds to the OBJ layer
-    fn pixel_visible_with_windows(&self, bg_n: usize, x: u16, y: u16) -> bool {
-        // FIXME: Partially offscreen windows don't work
-        // TODO: OBJ window
-        let enabled_windows = {
-            let mut windows = vec![];
-            if self.lcd_control_reg.enable_win0() {
-                windows.push(0);
-            }
-            if self.lcd_control_reg.enable_win1() {
-                windows.push(1);
-            }
-            windows
-        };
-
-        if enabled_windows.is_empty() {
-            return true;
-        }
-
-        let mut inside_windows = enabled_windows.into_iter().map(|window| {
-            let coords = if window == 0 {
-                &self.win0_coords
-            } else {
-                &self.win1_coords
-            };
-
-            // TODO: Properly handle off-screen values
-            let x_range = {
-                let lo = coords.0.coord_lo();
-                let mut hi = coords.0.coord_hi();
-                if hi > 240 || lo > hi {
-                    hi = 240;
-                }
-                lo..hi
-            };
-            let y_range = {
-                let lo = coords.1.coord_lo();
-                let mut hi = coords.1.coord_hi();
-                if hi > 160 || lo > hi {
-                    hi = 160;
-                }
-                lo..hi
-            };
-
-            x_range.contains(&x) && y_range.contains(&y)
-        });
-
-        let visible = match inside_windows.position(|inside| inside == true) {
-            Some(window) => {
-                // The pixel is inside some window;
-                // Check whether this BG is enabled within the highest priority window
-                let enabled_inside = (self.win_inside.0 >> (8 * window + bg_n)) & 1 == 1;
-                enabled_inside
-            }
-            None => {
-                // The pixel is outside all enabled windows;
-                // Check whether this BG is enabled in the outside window
-                let enabled_outside = (self.win_outside.0 >> bg_n) & 1 == 1;
-                enabled_outside
-            }
-        };
-
-        visible
     }
 }
 
