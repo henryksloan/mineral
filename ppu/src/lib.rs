@@ -303,28 +303,7 @@ impl PPU {
                                 .next()
                                 .and_then(|bottom| (bottom.0).1.then(|| bottom));
                             if let Some(bottom) = bottom {
-                                // Blend
-                                // TODO: Refactor to a function so it can be reused for black and white blending
-                                let top_color = (((top.1).1 as u16) << 8) | ((top.1).0 as u16);
-                                let (ar, ag, ab) = (
-                                    (top_color >> 10) & 0x1F,
-                                    (top_color >> 5) & 0x1F,
-                                    top_color & 0x1F,
-                                );
-                                let bot_color =
-                                    (((bottom.1).1 as u16) << 8) | ((bottom.1).0 as u16);
-                                let (br, bg, bb) = (
-                                    (bot_color >> 10) & 0x1F,
-                                    (bot_color >> 5) & 0x1F,
-                                    bot_color & 0x1F,
-                                );
-                                let (cr, cg, cb) = (
-                                    cmp::min((ar * eva + br * evb) >> 4, 31),
-                                    cmp::min((ag * eva + bg * evb) >> 4, 31),
-                                    cmp::min((ab * eva + bb * evb) >> 4, 31),
-                                );
-                                let blended = (cr << 10) | (cg << 5) | cb;
-                                ((blended & 0xFF) as u8, (blended >> 8) as u8)
+                                PPU::blend(top.1, bottom.1, eva, evb)
                             } else {
                                 top.1
                             }
@@ -344,20 +323,7 @@ impl PPU {
                         if !top.0 {
                             top.1 // If the topmost pixel is not a source pixel, blending does not occur
                         } else {
-                            let top_color = (((top.1).1 as u16) << 8) | ((top.1).0 as u16);
-                            let (ar, ag, ab) = (
-                                (top_color >> 10) & 0x1F,
-                                (top_color >> 5) & 0x1F,
-                                top_color & 0x1F,
-                            );
-                            let fade_value = 0x1F * ey;
-                            let (cr, cg, cb) = (
-                                cmp::min((ar * (16 - ey) + fade_value) >> 4, 31),
-                                cmp::min((ag * (16 - ey) + fade_value) >> 4, 31),
-                                cmp::min((ab * (16 - ey) + fade_value) >> 4, 31),
-                            );
-                            let blended = (cr << 10) | (cg << 5) | cb;
-                            ((blended & 0xFF) as u8, (blended >> 8) as u8)
+                            PPU::blend(top.1, (0x1F, 0xFF), 16 - ey, ey)
                         }
                     } else {
                         backdrop_color
@@ -374,19 +340,7 @@ impl PPU {
                         if !top.0 {
                             top.1 // If the topmost pixel is not a source pixel, blending does not occur
                         } else {
-                            let top_color = (((top.1).1 as u16) << 8) | ((top.1).0 as u16);
-                            let (ar, ag, ab) = (
-                                (top_color >> 10) & 0x1F,
-                                (top_color >> 5) & 0x1F,
-                                top_color & 0x1F,
-                            );
-                            let (cr, cg, cb) = (
-                                cmp::min((ar * (16 - ey)) >> 4, 31),
-                                cmp::min((ag * (16 - ey)) >> 4, 31),
-                                cmp::min((ab * (16 - ey)) >> 4, 31),
-                            );
-                            let blended = (cr << 10) | (cg << 5) | cb;
-                            ((blended & 0xFF) as u8, (blended >> 8) as u8)
+                            PPU::blend(top.1, (0, 0), 16 - ey, ey)
                         }
                     } else {
                         backdrop_color
@@ -398,6 +352,28 @@ impl PPU {
             self.framebuffer[pixel_i + 0] = color.0;
             self.framebuffer[pixel_i + 1] = color.1;
         }
+    }
+
+    fn blend(top: (u8, u8), bottom: (u8, u8), coeff_a: u16, coeff_b: u16) -> (u8, u8) {
+        let top_color = ((top.1 as u16) << 8) | (top.0 as u16);
+        let (ar, ag, ab) = (
+            (top_color >> 10) & 0x1F,
+            (top_color >> 5) & 0x1F,
+            top_color & 0x1F,
+        );
+        let bot_color = ((bottom.1 as u16) << 8) | (bottom.0 as u16);
+        let (br, bg, bb) = (
+            (bot_color >> 10) & 0x1F,
+            (bot_color >> 5) & 0x1F,
+            bot_color & 0x1F,
+        );
+        let (cr, cg, cb) = (
+            cmp::min((ar * coeff_a + br * coeff_b) >> 4, 31),
+            cmp::min((ag * coeff_a + bg * coeff_b) >> 4, 31),
+            cmp::min((ab * coeff_a + bb * coeff_b) >> 4, 31),
+        );
+        let blended = (cr << 10) | (cg << 5) | cb;
+        ((blended & 0xFF) as u8, (blended >> 8) as u8)
     }
 }
 
