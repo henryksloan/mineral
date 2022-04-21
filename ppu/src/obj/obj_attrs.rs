@@ -10,6 +10,27 @@ impl ObjAttrs {
         };
         size_map[self.1.size() as usize]
     }
+
+    // The sprite's (x, y) position in screen-space;
+    // negative values may be partially offscreen
+    pub fn screen_coords(&self) -> (i32, i32) {
+        let screen_x = {
+            let mut x = self.1.x_coord() as i32;
+            if x >= 240 {
+                x -= 512;
+            }
+            x
+        };
+        let screen_y = {
+            let mut y = self.0.y_coord() as i32;
+            if y >= 160 {
+                y -= 256;
+            }
+            y
+        };
+
+        (screen_x, screen_y)
+    }
 }
 
 bitfield! {

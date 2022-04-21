@@ -48,26 +48,25 @@ impl PPU {
             return;
         }
 
+        let (n_cols, n_rows) = attrs.size();
+        let (screen_x, screen_y) = attrs.screen_coords();
+
         let row = {
-            let mut y = attrs.0.y_coord() as i32;
-            if y >= 160 {
-                y -= 256;
-            }
-            let row = self.scan_line as i32 - y;
-            if row < 0 {
+            let row = self.scan_line as i32 - screen_y;
+            if row < 0 || row >= (n_rows * 8) as i32 {
                 return;
             }
             row as usize
         };
 
-        for col in 0..(attrs.size().0 as usize * 8) {
+        for col in 0..(n_cols as usize * 8) {
             let x = {
-                let mut x = attrs.1.x_coord() as i32 + col as i32;
-                if x >= 240 {
-                    x -= 512;
-                }
+                let x = screen_x + col as i32;
                 if x < 0 {
                     continue;
+                }
+                if x >= 240 {
+                    break;
                 }
                 x as usize
             };
@@ -101,20 +100,7 @@ impl PPU {
             )
         };
 
-        let ref_x = {
-            let mut x = attrs.1.x_coord() as i32;
-            if x >= 240 {
-                x -= 512;
-            }
-            x
-        };
-        let ref_y = {
-            let mut y = attrs.0.y_coord() as i32;
-            if y >= 160 {
-                y -= 256;
-            }
-            y
-        };
+        let (ref_x, ref_y) = attrs.screen_coords();
 
         let bytes_per_tile = if attrs.0.colors() { 2 } else { 1 };
         let size = attrs.size();
