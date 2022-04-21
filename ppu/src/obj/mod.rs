@@ -102,7 +102,6 @@ impl PPU {
 
         let (ref_x, ref_y) = attrs.screen_coords();
 
-        let bytes_per_tile = if attrs.0.colors() { 2 } else { 1 };
         let size = attrs.size();
         let hwidth = size.0 as i32 * 4 * if attrs.0.double_size() { 2 } else { 1 };
         let hheight = size.1 as i32 * 4 * if attrs.0.double_size() { 2 } else { 1 };
@@ -115,9 +114,6 @@ impl PPU {
         }
 
         for ix in (-hwidth)..hwidth {
-            // TODO: Most of the below can be refactored to some get_pixel function
-            // and something like draw_pixel
-            // same with regular sprites
             let screen_x = ref_x + hwidth + ix;
             if screen_x < 0 {
                 continue;
@@ -132,50 +128,15 @@ impl PPU {
             let tex_x = px + size.0 as i32 * 4;
             let tex_y = py + size.1 as i32 * 4;
 
-            // TODO: Add 256-color sprites etc.
             if (tex_x >= 0 && tex_x < size.0 as i32 * 8)
                 && (tex_y >= 0 && tex_y < size.1 as i32 * 8)
             {
-                // let row = tex_y as u16 / 8;
-                // let row_start = attrs.2.tile()
-                //     + row
-                //         * if self.lcd_control_reg.obj_char_mapping() {
-                //             size.0 * bytes_per_tile // 1D
-                //         } else {
-                //             0x20 // 2D
-                //         };
-                // let col = tex_x as u16 / 8;
-                // let tile_n = row_start + col * bytes_per_tile;
-
-                // let pixel_y = tex_y as usize % 8;
-                // let byte_n = ((tex_x as usize) / 2) % 4;
-                // let data = self.vram.borrow_mut().read(
-                //     (0x4000 * 4 + 32 * tile_n as usize + pixel_y * 4 + (byte_n as usize)) % 0x18000,
-                // );
-
-                // let color_i = match tex_x % 2 {
-                //     0 => data & 0b1111,            // Left pixel
-                //     1 | _ => (data >> 4) & 0b1111, // Right pixel
-                // } as usize;
-
-                // if color_i == 0 {
-                //     continue;
-                // }
-
-                // // TODO: Transparency?
-                // let color = self
-                //     .palette_ram
-                //     .borrow_mut()
-                //     .read_u16(0x200 + 2 * (attrs.2.palette() as usize * 16 + color_i));
-
                 let visible_with_windows = self.pixel_visible_with_windows(
                     4, // OBJ layer
                     screen_x as u16 + 1,
                     y as u16,
                 );
                 if visible_with_windows {
-                    // line_buf[screen_x as usize] =
-                    //     Some((attrs.2.priority(), (color as u8, (color >> 8) as u8)));
                     if let Some(pixel) =
                         self.get_sprite_pixel(&attrs, tex_y as usize, tex_x as usize)
                     {
