@@ -113,11 +113,8 @@ impl PPU {
     }
 
     fn increment_scan(&mut self) -> (bool, bool, bool, bool, bool) {
-        let mut vblank = false;
-        let mut hblank = false;
-        let mut vblank_irq = false;
-        let mut hblank_irq = false;
-        let mut vcounter_irq = false;
+        let (mut vblank, mut hblank) = (false, false); // Whether region was just entered
+        let (mut vblank_irq, mut hblank_irq, mut vcounter_irq) = (false, false, false);
 
         self.scan_cycle = (self.scan_cycle + 1) % 1232;
 
@@ -244,6 +241,7 @@ impl PPU {
         let ey = self.blend_fade_reg.ey().min(16);
 
         for i in 0..240 {
+            // Into `pixels`, place the non-transparent pixels at this dot in order of priority
             let bg_pixels = lines
                 .iter()
                 .filter_map(|line| line.1[i].map(|color| (line.0, color)));
@@ -258,8 +256,9 @@ impl PPU {
             pixels.sort_by_key(|((prio, layer), _)| {
                 (*prio, if *layer == 4 { 0 } else { *layer }) // Sprites of priority X are on top of of layer X
             });
-            pixels.push(backdrop_pixel);
+            pixels.push(backdrop_pixel); // The backdrop is always in the back
 
+            // Blending only applies if the blend window permits (or if all windows are disabled)
             let inside_blend_window = self.win_mask_bufs[i][5];
             let windowed_blend_mode = if inside_blend_window {
                 blend_mode
@@ -281,12 +280,15 @@ impl PPU {
                         if !(top.0).0 {
                             top.1 // If the topmost pixel is not a source pixel, blending does not occur
                         } else {
+                            // If there is a target directly below the source, then blend
                             let bottom = candidates
                                 .next()
                                 .and_then(|bottom| (bottom.0).1.then(|| bottom));
                             if let Some(bottom) = bottom {
                                 PPU::blend(top.1, bottom.1, eva, evb)
                             } else {
+                                // If there is no target, or it is blocked by another pixel (even
+                                // another source pixel) then no blending occurs
                                 top.1
                             }
                         }
@@ -294,8 +296,12 @@ impl PPU {
                         backdrop_color
                     }
                 }
-                0b10 => {
-                    // Fade to white
+                0b10 | 0b11 | _ => {
+                    // Fade to white/black
+                    let fade_color = match windowed_blend_mode & 1 {
+                        0 => (0x1F, 0xFF), // White
+                        1 | _ => (0, 0),   // Black
+                    };
                     let mut candidates = pixels.into_iter().map(|((_, layer_n), color)| {
                         let is_source = (blend_source_mask >> layer_n) & 1 == 1;
                         (is_source, color)
@@ -305,24 +311,7 @@ impl PPU {
                         if !top.0 {
                             top.1 // If the topmost pixel is not a source pixel, blending does not occur
                         } else {
-                            PPU::blend(top.1, (0x1F, 0xFF), 16 - ey, ey)
-                        }
-                    } else {
-                        backdrop_color
-                    }
-                }
-                0b11 | _ => {
-                    // Fade to black
-                    let mut candidates = pixels.into_iter().map(|((_, layer_n), color)| {
-                        let is_source = (blend_source_mask >> layer_n) & 1 == 1;
-                        (is_source, color)
-                    });
-                    let top = candidates.next();
-                    if let Some(top) = top {
-                        if !top.0 {
-                            top.1 // If the topmost pixel is not a source pixel, blending does not occur
-                        } else {
-                            PPU::blend(top.1, (0, 0), 16 - ey, ey)
+                            PPU::blend(top.1, fade_color, 16 - ey, ey)
                         }
                     } else {
                         backdrop_color
