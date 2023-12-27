@@ -132,10 +132,11 @@ impl PPU {
             let flip_v = (map_entry >> 11) & 1 == 1;
             if full_palette_mode {
                 let data = self.vram.borrow_mut().read(
-                    0x4000 * self.bg_control_regs[bg_n].char_block() as usize
+                    (0x4000 * self.bg_control_regs[bg_n].char_block() as usize
                         + 64 * tile_n as usize
                         + (if flip_v { 7 - row } else { row }) * 8
-                        + (if flip_h { 7 - pixel_n } else { pixel_n }),
+                        + (if flip_h { 7 - pixel_n } else { pixel_n }))
+                        % 0x18000,
                 );
                 if data != 0 {
                     let color = self.palette_ram.borrow_mut().read_u16(2 * data as usize);
@@ -146,10 +147,11 @@ impl PPU {
                 let byte_n = pixel_n / 2;
                 let is_left = (pixel_n % 2) == 0;
                 let data = self.vram.borrow_mut().read(
-                    0x4000 * self.bg_control_regs[bg_n].char_block() as usize
+                    (0x4000 * self.bg_control_regs[bg_n].char_block() as usize
                         + 32 * tile_n as usize
                         + (if flip_v { 7 - row } else { row }) * 4
-                        + (if flip_h { 3 - byte_n } else { byte_n }),
+                        + (if flip_h { 3 - byte_n } else { byte_n }))
+                        % 0x18000,
                 );
                 let color_i = if is_left ^ flip_h {
                     data & 0b1111

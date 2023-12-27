@@ -77,38 +77,41 @@ impl GBA {
             self.cpu.borrow_mut().tick();
         }
 
-        let (vblank, hblank, vblank_irq, hblank_irq, vcounter_irq) = self.ppu.borrow_mut().tick();
+        for _ in 0..3 {
+            let (vblank, hblank, vblank_irq, hblank_irq, vcounter_irq) =
+                self.ppu.borrow_mut().tick();
 
-        if vblank {
-            self.dma_controller.borrow_mut().on_vblank();
-        }
-        if hblank {
-            self.dma_controller.borrow_mut().on_hblank();
-        }
+            if vblank {
+                self.dma_controller.borrow_mut().on_vblank();
+            }
+            if hblank {
+                self.dma_controller.borrow_mut().on_hblank();
+            }
 
-        if vblank_irq {
-            self.interrupt_controller
-                .borrow_mut()
-                .request(interrupt_controller::IRQ_VBLANK);
-        }
-        if hblank_irq {
-            self.interrupt_controller
-                .borrow_mut()
-                .request(interrupt_controller::IRQ_HBLANK);
-        }
-        if vcounter_irq {
-            self.interrupt_controller
-                .borrow_mut()
-                .request(interrupt_controller::IRQ_VCOUNTER);
-        }
+            if vblank_irq {
+                self.interrupt_controller
+                    .borrow_mut()
+                    .request(interrupt_controller::IRQ_VBLANK);
+            }
+            if hblank_irq {
+                self.interrupt_controller
+                    .borrow_mut()
+                    .request(interrupt_controller::IRQ_HBLANK);
+            }
+            if vcounter_irq {
+                self.interrupt_controller
+                    .borrow_mut()
+                    .request(interrupt_controller::IRQ_VCOUNTER);
+            }
 
-        // TODO: Tick APU
-        self.timer_controller
-            .borrow_mut()
-            .tick(self.interrupt_controller.clone());
-        self.dma_controller
-            .borrow_mut()
-            .tick(self.cpu.clone(), self.interrupt_controller.clone());
+            // TODO: Tick APU
+            self.timer_controller
+                .borrow_mut()
+                .tick(self.interrupt_controller.clone());
+            self.dma_controller
+                .borrow_mut()
+                .tick(self.cpu.clone(), self.interrupt_controller.clone());
+        }
 
         // TODO: When a frame is ready, the GBA should expose the framebuffer,
         // TODO: and the frontend can read it AND THEN update keypad state
