@@ -2,8 +2,9 @@
 extern crate bitfield;
 
 mod registers;
+mod tone_channel;
 
-use registers::*;
+use tone_channel::*;
 
 use memory::Memory;
 
@@ -34,9 +35,7 @@ pub enum DmaSoundTimer {
 
 pub struct SoundController {
     // TODO: DO NOT SUBMIT: Temporary implementation
-    tone2_rate: u16,
-    tone2_counter: u32,
-    tone2_period: u32,
+    tone_channels: [ToneChannel; 2],
     sample_divider: u32,
     fifos: [VecDeque<u32>; 2],
     fifo_octet_i: [usize; 2],
@@ -48,9 +47,7 @@ pub struct SoundController {
 impl SoundController {
     pub fn new(audio_buffer: Arc<Mutex<AudioRingBuffer>>) -> Self {
         Self {
-            tone2_rate: 0,
-            tone2_counter: 0,
-            tone2_period: 262144,
+            tone_channels: [ToneChannel::new(), ToneChannel::new()],
             sample_divider: 0,
             fifos: [VecDeque::with_capacity(8), VecDeque::with_capacity(8)],
             fifo_octet_i: [0; 2],
@@ -61,25 +58,20 @@ impl SoundController {
     }
 
     pub fn tick(&mut self) -> bool {
-        if self.tone2_counter > 0 {
-            self.tone2_counter -= 1;
-        } else {
-            self.tone2_counter = self.tone2_period;
+        for tone_channel in &mut self.tone_channels {
+            tone_channel.tick();
         }
 
         if self.sample_divider > 0 {
             self.sample_divider -= 1;
         } else {
             self.sample_divider = 16_777_216 / 44_100;
-            // self.sample_divider = 16_777_216 / 32_768;
             let mut audio_buffer = self.audio_buffer.lock().unwrap();
             let write_i = audio_buffer.write_cursor & (audio_buffer.buffer.len() - 1);
             audio_buffer.buffer[write_i] = 0.0;
-            // audio_buffer.buffer[write_i] += if self.tone2_counter < (self.tone2_period / 2) {
-            //     0.25
-            // } else {
-            //     -0.25
-            // };
+            for tone_channel in &self.tone_channels {
+                audio_buffer.buffer[write_i] += 0.25 * tone_channel.sample();
+            }
             if self.fifos[0].len() > 0 {
                 audio_buffer.buffer[write_i] += ((self.fifos[0].front().unwrap()
                     >> (self.fifo_octet_i[0] * 8))
@@ -130,16 +122,16 @@ impl Memory for SoundController {
 
     fn write(&mut self, addr: usize, data: u8) {
         match addr {
-            0x06C => {
-                self.tone2_rate &= 0xFF00;
-                self.tone2_rate |= data as u16;
-                self.tone2_period = 16_777_216 / (131072 / (2048 - self.tone2_rate as u32));
-            }
-            0x06D => {
-                self.tone2_rate &= 0x00FF;
-                self.tone2_rate |= (data as u16 & 0b111) << 8;
-                self.tone2_period = 16_777_216 / (131072 / (2048 - self.tone2_rate as u32));
-            }
+            0x060 => self.tone_channels[0].sweep_reg.set_lo_byte(data),
+            0x061 => self.tone_channels[0].sweep_reg.set_hi_byte(data),
+            0x062 => self.tone_channels[0].control_reg.set_lo_byte(data),
+            0x063 => self.tone_channels[0].control_reg.set_hi_byte(data),
+            0x064 => self.tone_channels[0].set_frequency_reg_lo(data),
+            0x065 => self.tone_channels[0].set_frequency_reg_hi(data),
+            0x068 => self.tone_channels[0].control_reg.set_lo_byte(data),
+            0x069 => self.tone_channels[0].control_reg.set_hi_byte(data),
+            0x06C => self.tone_channels[0].set_frequency_reg_lo(data),
+            0x06D => self.tone_channels[0].set_frequency_reg_hi(data),
             0x083 => {
                 self.dma_timer_select[0] = match (data >> 2) & 1 {
                     0 => DmaSoundTimer::Timer0,

@@ -29,12 +29,12 @@ bitfield! {
 
 bitfield! {
   /// 4000064h, 400006Ch, 4000074h - SOUND1CNT_X, SOUND2CNT_H, SOUND3CNT_X
-  /// Controls frequency, length-limiting and resetting for channels 1, 2 and 3
+  /// Controls frequency, length-limiting and restarting for channels 1, 2 and 3
   pub struct FrequencyReg(u16);
   impl Debug;
   pub rate, _: 10, 0;
   pub timed, _: 14;
-  pub reset, _: 15;
+  pub restart, _: 15;
 
   pub u8, lo_byte, set_lo_byte: 7, 0;
   pub u8, hi_byte, set_hi_byte: 15, 8;
