@@ -78,8 +78,16 @@ impl DmaController {
                 } else {
                     n_units = std::cmp::min(n_units, 0x4000);
                 }
+                if (channel == 1 || channel == 2) && (active_transfer.0.start_timing() == 0b11) {
+                    n_units = 4;
+                    println!("Sound DMA {channel}: {:x?}", active_transfer);
+                }
                 for _ in 0..n_units {
-                    let unit_size = if active_transfer.0.unit_size() { 4 } else { 2 };
+                    let mut unit_size = if active_transfer.0.unit_size() { 4 } else { 2 };
+                    if (channel == 1 || channel == 2) && (active_transfer.0.start_timing() == 0b11)
+                    {
+                        unit_size = 4;
+                    }
 
                     if !((0x040000B0..=0x040000E1).contains(&active_transfer.1))
                         && !((0x040000B0..=0x040000E1).contains(&active_transfer.2))
@@ -93,13 +101,17 @@ impl DmaController {
                         }
                     }
 
-                    match active_transfer.0.dest_adjustment() {
-                        0b00 | 0b11 => {
-                            active_transfer.2 = active_transfer.2.wrapping_add(unit_size)
+                    if !((channel == 1 || channel == 2)
+                        && (active_transfer.0.start_timing() == 0b11))
+                    {
+                        match active_transfer.0.dest_adjustment() {
+                            0b00 | 0b11 => {
+                                active_transfer.2 = active_transfer.2.wrapping_add(unit_size)
+                            }
+                            0b01 => active_transfer.2 = active_transfer.2.wrapping_sub(unit_size),
+                            0b10 => {} // Fixed
+                            _ => {}    // TODO
                         }
-                        0b01 => active_transfer.2 = active_transfer.2.wrapping_sub(unit_size),
-                        0b10 => {} // Fixed
-                        _ => {}    // TODO
                     }
 
                     match active_transfer.0.source_adjustment() {
@@ -145,6 +157,16 @@ impl DmaController {
             let enable = self.control_regs[channel_n].enable();
             let start_timing = self.control_regs[channel_n].start_timing();
             if enable && start_timing == 0b01 {
+                self.activate_channel(channel_n, true);
+            }
+        }
+    }
+
+    pub fn on_dma_sound_request(&mut self) {
+        for channel_n in [1, 2] {
+            let enable = self.control_regs[channel_n].enable();
+            let start_timing = self.control_regs[channel_n].start_timing();
+            if enable && start_timing == 0b11 {
                 self.activate_channel(channel_n, true);
             }
         }

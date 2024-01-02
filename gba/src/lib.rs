@@ -115,10 +115,15 @@ impl GBA {
                     .request(interrupt_controller::IRQ_VCOUNTER);
             }
 
-            self.sound_controller.borrow_mut().tick();
-            self.timer_controller
-                .borrow_mut()
-                .tick(self.interrupt_controller.clone());
+            let sound_dma_requested = self.sound_controller.borrow_mut().tick();
+            if sound_dma_requested {
+                // println!("Bla");
+                self.dma_controller.borrow_mut().on_dma_sound_request();
+            }
+            self.timer_controller.borrow_mut().tick(
+                self.interrupt_controller.clone(),
+                self.sound_controller.clone(),
+            );
             self.dma_controller
                 .borrow_mut()
                 .tick(self.cpu.clone(), self.interrupt_controller.clone());

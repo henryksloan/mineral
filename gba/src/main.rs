@@ -40,6 +40,13 @@ impl AudioCallback for AudioBufferWrapper {
             let play_i = audio_buffer.play_cursor & (audio_buffer.buffer.len() - 1);
             *x = audio_buffer.buffer[play_i];
             audio_buffer.play_cursor += 1;
+            // audio_buffer.play_cursor = (audio_buffer.play_cursor as i64
+            //     + (((audio_buffer.write_cursor as i64 - audio_buffer.play_cursor as i64) >> 8)
+            //         & !1)) as usize;
+            println!(
+                "{}",
+                audio_buffer.write_cursor as i64 - audio_buffer.play_cursor as i64
+            );
         }
     }
 }

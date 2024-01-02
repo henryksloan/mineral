@@ -1,6 +1,7 @@
 use crate::interrupt_controller::{self, InterruptController};
 
 use memory::Memory;
+use sound::{DmaSoundTimer, SoundController};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -25,15 +26,24 @@ impl TimerController {
         }
     }
 
-    pub fn tick(&mut self, interrupt_controller: Rc<RefCell<InterruptController>>) {
+    pub fn tick(
+        &mut self,
+        interrupt_controller: Rc<RefCell<InterruptController>>,
+        sound_controller: Rc<RefCell<SoundController>>,
+    ) {
         for i in 0..4 {
             if i == 0 || !self.control_regs[i].count_up() {
-                self.tick_timer(i, &interrupt_controller);
+                self.tick_timer(i, &interrupt_controller, &sound_controller);
             }
         }
     }
 
-    fn tick_timer(&mut self, i: usize, interrupt_controller: &Rc<RefCell<InterruptController>>) {
+    fn tick_timer(
+        &mut self,
+        i: usize,
+        interrupt_controller: &Rc<RefCell<InterruptController>>,
+        sound_controller: &Rc<RefCell<SoundController>>,
+    ) {
         if self.control_regs[i].enable() {
             if i != 0 && self.control_regs[i].count_up() {
                 self.counters[i] = self.counters[i].wrapping_add(1);
@@ -58,8 +68,18 @@ impl TimerController {
                     }
                 }
 
+                match i {
+                    0 => sound_controller
+                        .borrow_mut()
+                        .on_timer_overflow(DmaSoundTimer::Timer0),
+                    1 => sound_controller
+                        .borrow_mut()
+                        .on_timer_overflow(DmaSoundTimer::Timer1),
+                    _ => {}
+                }
+
                 if i < 3 && self.control_regs[i + 1].count_up() {
-                    self.tick_timer(i + 1, interrupt_controller);
+                    self.tick_timer(i + 1, interrupt_controller, sound_controller);
                 }
             }
         }
