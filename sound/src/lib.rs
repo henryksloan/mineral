@@ -1,3 +1,10 @@
+#[macro_use]
+extern crate bitfield;
+
+mod registers;
+
+use registers::*;
+
 use memory::Memory;
 
 use std::collections::VecDeque;
@@ -12,8 +19,7 @@ pub struct AudioRingBuffer {
 impl AudioRingBuffer {
     pub fn new() -> Self {
         Self {
-            // buffer: vec![0.0; 512 * 16 * 2],
-            buffer: vec![0.0; 512 * 16 * 8],
+            buffer: vec![0.0; 512 * 16 * 2],
             write_cursor: 0,
             play_cursor: 0,
         }
@@ -65,6 +71,7 @@ impl SoundController {
             self.sample_divider -= 1;
         } else {
             self.sample_divider = 16_777_216 / 44_100;
+            // self.sample_divider = 16_777_216 / 32_768;
             let mut audio_buffer = self.audio_buffer.lock().unwrap();
             let write_i = audio_buffer.write_cursor & (audio_buffer.buffer.len() - 1);
             audio_buffer.buffer[write_i] = 0.0;
@@ -78,7 +85,6 @@ impl SoundController {
                     >> (self.fifo_octet_i[0] * 8))
                     & 0xFF) as i8 as f32
                     / 256.;
-                // println!("{:?}", audio_buffer.buffer[write_i]);
             }
             if self.fifos[1].len() > 0 {
                 audio_buffer.buffer[write_i] += ((self.fifos[1].front().unwrap()
@@ -103,7 +109,6 @@ impl SoundController {
     }
 
     fn tick_fifo(&mut self, fifo_i: usize) {
-        // println!("Yee");
         if self.fifo_octet_i[fifo_i] < 3 {
             self.fifo_octet_i[fifo_i] += 1;
         } else {
@@ -144,7 +149,6 @@ impl Memory for SoundController {
                     0 => DmaSoundTimer::Timer0,
                     1 | _ => DmaSoundTimer::Timer1,
                 };
-                // println!("{:?}", self.dma_timer_select);
                 if (data >> 3) & 1 == 1 {
                     self.fifos[0].clear();
                     self.fifo_octet_i[0] = 0;

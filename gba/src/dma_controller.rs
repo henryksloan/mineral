@@ -80,7 +80,6 @@ impl DmaController {
                 }
                 if (channel == 1 || channel == 2) && (active_transfer.0.start_timing() == 0b11) {
                     n_units = 4;
-                    println!("Sound DMA {channel}: {:x?}", active_transfer);
                 }
                 for _ in 0..n_units {
                     let mut unit_size = if active_transfer.0.unit_size() { 4 } else { 2 };

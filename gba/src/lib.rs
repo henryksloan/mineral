@@ -88,6 +88,9 @@ impl GBA {
             self.cpu.borrow_mut().tick();
         }
 
+        // TODO: This loop is an artificial and highly imperfect compensation for the lack of CPU
+        // pipeline emulation. The imperfect timing breaks some visuals (like the 3D effect in
+        // Monkey Ball Jr., I believe) and leads to sound desync.
         for _ in 0..3 {
             let (vblank, hblank, vblank_irq, hblank_irq, vcounter_irq) =
                 self.ppu.borrow_mut().tick();
@@ -117,7 +120,6 @@ impl GBA {
 
             let sound_dma_requested = self.sound_controller.borrow_mut().tick();
             if sound_dma_requested {
-                // println!("Bla");
                 self.dma_controller.borrow_mut().on_dma_sound_request();
             }
             self.timer_controller.borrow_mut().tick(
