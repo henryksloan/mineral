@@ -1,8 +1,48 @@
 use gba::GBA;
+use sound::AudioRingBuffer;
 
+use std::sync::{Arc, Mutex};
 use std::{env, fs::File, io::Read, time};
 
+use sdl2::audio::{AudioCallback, AudioSpecDesired};
 use sdl2::{event::Event, keyboard::Scancode, pixels::PixelFormatEnum};
+
+struct SquareWave {
+    phase_inc: f32,
+    phase: f32,
+    volume: f32,
+}
+
+impl AudioCallback for SquareWave {
+    type Channel = f32;
+
+    fn callback(&mut self, out: &mut [f32]) {
+        // Generate a square wave
+        for x in out.iter_mut() {
+            *x = if self.phase <= 0.5 {
+                self.volume
+            } else {
+                -self.volume
+            };
+            self.phase = (self.phase + self.phase_inc) % 1.0;
+        }
+    }
+}
+
+struct AudioBufferWrapper(Arc<Mutex<AudioRingBuffer>>);
+
+impl AudioCallback for AudioBufferWrapper {
+    type Channel = f32;
+
+    fn callback(&mut self, out: &mut [f32]) {
+        let mut audio_buffer = self.0.lock().unwrap();
+        for x in out.iter_mut() {
+            let play_i = audio_buffer.play_cursor & (audio_buffer.buffer.len() - 1);
+            *x = audio_buffer.buffer[play_i];
+            audio_buffer.play_cursor += 1;
+        }
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -45,6 +85,30 @@ fn main() {
     let mut gba = GBA::new();
     gba.flash_bios(bios);
     gba.flash_cart(cart);
+
+    let audio_subsystem = sdl_context.audio().unwrap();
+
+    let desired_spec = AudioSpecDesired {
+        freq: Some(44_100),
+        channels: Some(1), // mono
+        // samples: None,     // default sample size
+        samples: Some(512),
+    };
+
+    let device = audio_subsystem
+        .open_playback(None, &desired_spec, |spec| {
+            // initialize the audio callback
+            // SquareWave {
+            //     phase_inc: 440.0 / spec.freq as f32,
+            //     phase: 0.0,
+            //     volume: 0.25,
+            // }
+            AudioBufferWrapper(gba.get_audio_buffer())
+        })
+        .unwrap();
+
+    // Start playback
+    device.resume();
 
     let controls = vec![
         Scancode::A,

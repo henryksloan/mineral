@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 cpu = { path = "../cpu" }
 ppu = { path = "../ppu" }
+sound = { path = "../sound" }
 memory = { path = "../memory" }
 bitfield = "0.13.2"
 sdl2 = "0.34.3"
