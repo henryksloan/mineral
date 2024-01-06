@@ -3,9 +3,10 @@ use crate::registers::*;
 // The length counter is in units of 1/256 seconds, so this represents the number of clock ticks
 // per length counter decrement.
 const LENGTH_UNIT_PERIOD: u32 = 16777216 / 256;
-// The envelope counter is in units of 1/64 seconds, so this represents the number of clock ticks
-// per envelope counter decrement.
+// The envelope counter is in units of 1/64 seconds.
 const ENVELOPE_UNIT_PERIOD: u32 = 16777216 / 64;
+// The sweep counter is in units of 1/64 seconds.
+const SWEEP_UNIT_PERIOD: u32 = 16777216 / 128;
 
 pub struct ToneChannel {
     // Channel 2 doesn't support tone sweep, so this register is unmodifiable via IO for that channel.
@@ -13,12 +14,15 @@ pub struct ToneChannel {
     control_reg: ToneControlReg,
     frequency_reg: FrequencyReg,
 
+    curr_rate: u16,
     counter: u32,
     curr_vol: u16,
     length_counter: u32,
     length_divider: u32,
     envelope_counter: u32,
     envelope_divider: u32,
+    sweep_counter: u32,
+    sweep_divider: u32,
 }
 
 impl ToneChannel {
@@ -28,12 +32,15 @@ impl ToneChannel {
             control_reg: ToneControlReg(0),
             frequency_reg: FrequencyReg(0),
 
+            curr_rate: 0,
             counter: 0,
             curr_vol: 0,
             length_counter: 0,
             length_divider: 0,
             envelope_counter: 0,
             envelope_divider: 0,
+            sweep_counter: 0,
+            sweep_divider: 0,
         }
     }
 
@@ -56,7 +63,7 @@ impl ToneChannel {
         if self.envelope_divider > 0 {
             self.envelope_divider -= 1;
         } else {
-            self.envelope_divider = LENGTH_UNIT_PERIOD;
+            self.envelope_divider = ENVELOPE_UNIT_PERIOD;
             if self.envelope_counter > 0 {
                 self.envelope_counter -= 1;
             } else {
@@ -77,15 +84,40 @@ impl ToneChannel {
                 }
             }
         }
+
+        if self.sweep_divider > 0 {
+            self.sweep_divider -= 1;
+        } else {
+            self.sweep_divider = SWEEP_UNIT_PERIOD;
+            if self.sweep_counter > 0 {
+                self.sweep_counter -= 1;
+            } else {
+                self.sweep_counter = self.sweep_reg.sweep_time() as u32;
+                if self.sweep_counter != 0 {
+                    let delta_rate = self.curr_rate / (1 << self.sweep_reg.sweep_shift_n());
+                    match self.sweep_reg.sweep_dir() {
+                        SweepDirection::Decrease => {
+                            self.curr_rate = self.curr_rate.saturating_sub(delta_rate);
+                        }
+                        SweepDirection::Increase => {
+                            self.curr_rate = std::cmp::min(self.curr_rate + delta_rate, 2047);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn restart(&mut self) {
+        self.curr_rate = self.frequency_reg.rate();
         self.counter = self.period();
         self.curr_vol = self.control_reg.envelope_init();
         self.length_counter = 64 - self.control_reg.length() as u32;
         self.length_divider = LENGTH_UNIT_PERIOD;
         self.envelope_counter = self.control_reg.envelope_step_time() as u32;
         self.envelope_divider = ENVELOPE_UNIT_PERIOD;
+        self.sweep_counter = self.sweep_reg.sweep_time() as u32;
+        self.sweep_divider = SWEEP_UNIT_PERIOD;
     }
 
     pub fn sample(&self) -> f32 {
@@ -128,7 +160,7 @@ impl ToneChannel {
     }
 
     fn period(&self) -> u32 {
-        16_777_216 / (131072 / (2048 - self.frequency_reg.rate() as u32))
+        16_777_216 / (131072 / (2048 - self.curr_rate as u32))
     }
 
     fn duty_high_width(&self) -> u32 {

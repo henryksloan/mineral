@@ -1,10 +1,27 @@
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum SweepDirection {
+    Decrease,
+    Increase,
+}
+
+impl From<u8> for SweepDirection {
+    fn from(val: u8) -> Self {
+        match val {
+            0 => Self::Increase,
+            1 | _ => Self::Decrease,
+        }
+    }
+}
+
 bitfield! {
   /// 4000060h - SOUND1CNT_L
   /// Configures tone sweep for channel 1
   pub struct ToneSweepReg(u16);
   impl Debug;
   pub sweep_shift_n, _: 2, 0;
-  pub sweep_dir, _: 3;
+  // bitfield ignores types and `into` for single-index fields, so `3, 3` tells it to treat it
+  // like a non-bool field.
+  pub u8, into SweepDirection, sweep_dir, _: 3, 3;
   pub sweep_time, _: 6, 4;
 
   pub u8, lo_byte, set_lo_byte: 7, 0;
