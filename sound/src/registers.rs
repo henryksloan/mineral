@@ -101,6 +101,21 @@ bitfield! {
   pub u8, hi_byte, set_hi_byte: 15, 8;
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum DmaSoundTimer {
+    Timer0,
+    Timer1,
+}
+
+impl From<u8> for DmaSoundTimer {
+    fn from(val: u8) -> Self {
+        match val {
+            0 => Self::Timer0,
+            1 | _ => Self::Timer1,
+        }
+    }
+}
+
 bitfield! {
   /// 4000082h - SOUNDCNT_H
   /// Configures DMA channel and sound mixing
@@ -111,12 +126,14 @@ bitfield! {
   pub dma_b_vol, _: 3;
   pub enable_dma_a_right, _: 8;
   pub enable_dma_a_left, _: 9;
-  pub dma_a_timer, _: 10;
-  pub dma_a_reset, _: 11;
+  // bitfield ignores types and `into` for single-index fields, so `10, 10` tells it to treat it
+  // like a non-bool field.
+  pub u8, into DmaSoundTimer, dma_a_timer, _: 10, 10;
+  pub dma_a_restart, _: 11;
   pub enable_dma_b_right, _: 12;
   pub enable_dma_b_left, _: 13;
-  pub dma_b_timer, _: 14;
-  pub dma_b_reset, _: 15;
+  pub u8, into DmaSoundTimer, dma_b_timer, _: 14, 14;
+  pub dma_b_restart, _: 15;
 
   pub u8, lo_byte, set_lo_byte: 7, 0;
   pub u8, hi_byte, set_hi_byte: 15, 8;
