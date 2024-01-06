@@ -45,12 +45,21 @@ impl ToneChannel {
     }
 
     pub fn tick(&mut self) {
+        self.tick_wave();
+        self.tick_length();
+        self.tick_envelope();
+        self.tick_sweep();
+    }
+
+    fn tick_wave(&mut self) {
         if self.counter > 0 {
             self.counter -= 1;
         } else {
             self.counter = self.period();
         }
+    }
 
+    fn tick_length(&mut self) {
         if self.length_divider > 0 {
             self.length_divider -= 1;
         } else {
@@ -59,7 +68,9 @@ impl ToneChannel {
                 self.length_counter -= 1;
             }
         }
+    }
 
+    fn tick_envelope(&mut self) {
         if self.envelope_divider > 0 {
             self.envelope_divider -= 1;
         } else {
@@ -68,23 +79,18 @@ impl ToneChannel {
                 self.envelope_counter -= 1;
             } else {
                 self.envelope_counter = self.control_reg.envelope_step_time() as u32;
-                if self.envelope_counter != 0 {
-                    match self.control_reg.envelope_dir() {
-                        EnvelopeDirection::Decrease => {
-                            if self.curr_vol > 0 {
-                                self.curr_vol -= 1;
-                            }
-                        }
-                        EnvelopeDirection::Increase => {
-                            if self.curr_vol < 15 {
-                                self.curr_vol += 1;
-                            }
-                        }
-                    }
+                if self.envelope_counter == 0 {
+                    return;
+                }
+                self.curr_vol = match self.control_reg.envelope_dir() {
+                    EnvelopeDirection::Decrease => self.curr_vol.saturating_sub(1),
+                    EnvelopeDirection::Increase => std::cmp::min(self.curr_vol + 1, 15),
                 }
             }
         }
+    }
 
+    fn tick_sweep(&mut self) {
         if self.sweep_divider > 0 {
             self.sweep_divider -= 1;
         } else {
@@ -95,12 +101,10 @@ impl ToneChannel {
                 self.sweep_counter = self.sweep_reg.sweep_time() as u32;
                 if self.sweep_counter != 0 {
                     let delta_rate = self.curr_rate / (1 << self.sweep_reg.sweep_shift_n());
-                    match self.sweep_reg.sweep_dir() {
-                        SweepDirection::Decrease => {
-                            self.curr_rate = self.curr_rate.saturating_sub(delta_rate);
-                        }
+                    self.curr_rate = match self.sweep_reg.sweep_dir() {
+                        SweepDirection::Decrease => self.curr_rate.saturating_sub(delta_rate),
                         SweepDirection::Increase => {
-                            self.curr_rate = std::cmp::min(self.curr_rate + delta_rate, 2047);
+                            std::cmp::min(self.curr_rate + delta_rate, 2047)
                         }
                     }
                 }
