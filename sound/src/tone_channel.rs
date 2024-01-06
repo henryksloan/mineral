@@ -11,7 +11,6 @@ pub struct ToneChannel {
     frequency_reg: FrequencyReg,
 
     counter: u32,
-    period: u32,
     curr_vol: u16,
     length_counter: u32,
     length_divider: u32,
@@ -25,7 +24,6 @@ impl ToneChannel {
             frequency_reg: FrequencyReg(0),
 
             counter: 0,
-            period: 0,
             curr_vol: 0,
             length_counter: 0,
             length_divider: 0,
@@ -36,7 +34,7 @@ impl ToneChannel {
         if self.counter > 0 {
             self.counter -= 1;
         } else {
-            self.counter = self.period;
+            self.counter = self.period();
         }
 
         if self.length_divider > 0 {
@@ -49,13 +47,20 @@ impl ToneChannel {
         }
     }
 
+    pub fn restart(&mut self) {
+        self.counter = self.period();
+        self.curr_vol = self.control_reg.envelope_init();
+        self.length_counter = 64 - self.control_reg.length() as u32;
+        self.length_divider = LENGTH_UNIT_PERIOD;
+    }
+
     pub fn sample(&self) -> f32 {
-        // TODO: DO NOT SUBMIT: Duty cycle, envelope, frequency sweep
+        // TODO: DO NOT SUBMIT: Envelope, frequency sweep
         if self.frequency_reg.timed() && self.length_counter == 0 {
             return 0.0;
         }
         let vol = (self.curr_vol as f32) / 15.0;
-        if self.counter < (self.period / 2) {
+        if self.counter < self.duty_high_width() {
             vol
         } else {
             -vol
@@ -64,25 +69,26 @@ impl ToneChannel {
 
     pub fn set_frequency_reg_lo(&mut self, data: u8) {
         self.frequency_reg.set_lo_byte(data);
-        self.update_period();
     }
 
     pub fn set_frequency_reg_hi(&mut self, data: u8) {
         self.frequency_reg.set_hi_byte(data);
-        self.update_period();
         if self.frequency_reg.restart() {
             self.restart();
         }
     }
 
-    fn update_period(&mut self) {
-        self.period = 16_777_216 / (131072 / (2048 - self.frequency_reg.rate() as u32));
+    fn period(&self) -> u32 {
+        16_777_216 / (131072 / (2048 - self.frequency_reg.rate() as u32))
     }
 
-    fn restart(&mut self) {
-        self.counter = self.period;
-        self.curr_vol = self.control_reg.envelope_init();
-        self.length_counter = 64 - self.control_reg.length() as u32;
-        self.length_divider = LENGTH_UNIT_PERIOD;
+    fn duty_high_width(&self) -> u32 {
+        let period = self.period();
+        match self.control_reg.duty_pattern() {
+            0 => period / 8,
+            1 => period / 4,
+            2 => period / 2,
+            3 | _ => (3 * period) / 4,
+        }
     }
 }

@@ -63,6 +63,7 @@ impl SoundController {
             self.sample_divider = 16_777_216 / 44_100;
             let mut audio_buffer = self.audio_buffer.lock().unwrap();
             let write_i = audio_buffer.write_cursor & (audio_buffer.buffer.len() - 1);
+            // TODO: DO NOT SUBMIT: Channel enablement
             audio_buffer.buffer[write_i] = 0.0;
             for tone_channel in &self.tone_channels {
                 audio_buffer.buffer[write_i] += 0.25 * tone_channel.sample();
