@@ -112,7 +112,7 @@ impl ToneChannel {
         }
     }
 
-    pub fn restart(&mut self) {
+    fn restart(&mut self) {
         self.curr_rate = self.frequency_reg.rate();
         self.counter = self.period();
         self.curr_vol = self.control_reg.envelope_init();
@@ -125,7 +125,6 @@ impl ToneChannel {
     }
 
     pub fn sample(&self) -> f32 {
-        // TODO: DO NOT SUBMIT: Frequency sweep
         if self.frequency_reg.timed() && self.length_counter == 0 {
             return 0.0;
         }
