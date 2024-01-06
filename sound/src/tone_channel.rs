@@ -7,7 +7,7 @@ const LENGTH_UNIT_PERIOD: u32 = 16777216 / 256;
 pub struct ToneChannel {
     // Channel 2 doesn't support tone sweep, so this register is unmodifiable via IO for that channel.
     pub sweep_reg: ToneSweepReg,
-    pub control_reg: ToneControlReg,
+    control_reg: ToneControlReg,
     frequency_reg: FrequencyReg,
 
     counter: u32,
@@ -64,6 +64,19 @@ impl ToneChannel {
             vol
         } else {
             -vol
+        }
+    }
+
+    pub fn set_control_reg_lo(&mut self, data: u8) {
+        self.control_reg.set_lo_byte(data);
+    }
+
+    pub fn set_control_reg_hi(&mut self, data: u8) {
+        self.control_reg.set_hi_byte(data);
+        // Writing zeroes to bits 3-7 of this half of the control register immediately turns off
+        // the channel.
+        if !self.control_reg.envelope_dir() && self.control_reg.envelope_init() == 0 {
+            self.curr_vol = 0;
         }
     }
 

@@ -34,7 +34,9 @@ impl AudioRingBuffer {
 pub struct SoundController {
     tone_channels: [ToneChannel; 2],
     dma_sound_channels: [DmaSoundChannel; 2],
+    psg_left_right_reg: PsgLeftRightReg,
     dma_control_reg: DmaControlMixReg,
+    master_enable: bool,
     sample_divider: u32,
     request_dma: bool,
     audio_buffer: Arc<Mutex<AudioRingBuffer>>,
@@ -45,7 +47,9 @@ impl SoundController {
         Self {
             tone_channels: [ToneChannel::new(), ToneChannel::new()],
             dma_sound_channels: [DmaSoundChannel::new(), DmaSoundChannel::new()],
+            psg_left_right_reg: PsgLeftRightReg(0),
             dma_control_reg: DmaControlMixReg(0),
+            master_enable: false,
             sample_divider: 0,
             request_dma: false,
             audio_buffer,
@@ -63,13 +67,27 @@ impl SoundController {
             self.sample_divider = 16_777_216 / 44_100;
             let mut audio_buffer = self.audio_buffer.lock().unwrap();
             let write_i = audio_buffer.write_cursor & (audio_buffer.buffer.len() - 1);
-            // TODO: DO NOT SUBMIT: Channel enablement
             audio_buffer.buffer[write_i] = 0.0;
-            for tone_channel in &self.tone_channels {
-                audio_buffer.buffer[write_i] += 0.25 * tone_channel.sample();
-            }
-            for dma_sound_channel in &self.dma_sound_channels {
-                audio_buffer.buffer[write_i] += 0.5 * dma_sound_channel.sample();
+            if self.master_enable {
+                let psg_multiplier = 0.25 * self.dma_control_reg.psg_vol_multiplier();
+                for i in [0, 1] {
+                    let psg_enabled = self.psg_left_right_reg.channel_enabled(i);
+                    // TODO: Separate left and right audio
+                    if !(psg_enabled.left || psg_enabled.right) {
+                        continue;
+                    }
+                    audio_buffer.buffer[write_i] += psg_multiplier * self.tone_channels[i].sample();
+                }
+                for i in [0, 1] {
+                    let dma_enabled = self.dma_control_reg.dma_sound_enabled(i);
+                    // TODO: Separate left and right audio
+                    if !(dma_enabled.left || dma_enabled.right) {
+                        continue;
+                    }
+                    let dma_multiplier = 0.5 * self.dma_control_reg.dma_sound_vol_multiplier(i);
+                    audio_buffer.buffer[write_i] +=
+                        dma_multiplier * self.dma_sound_channels[i].sample();
+                }
             }
             audio_buffer.write_cursor += 1;
         }
@@ -101,14 +119,16 @@ impl Memory for SoundController {
         match addr {
             0x060 => self.tone_channels[0].sweep_reg.set_lo_byte(data),
             0x061 => self.tone_channels[0].sweep_reg.set_hi_byte(data),
-            0x062 => self.tone_channels[0].control_reg.set_lo_byte(data),
-            0x063 => self.tone_channels[0].control_reg.set_hi_byte(data),
+            0x062 => self.tone_channels[0].set_control_reg_lo(data),
+            0x063 => self.tone_channels[0].set_control_reg_hi(data),
             0x064 => self.tone_channels[0].set_frequency_reg_lo(data),
             0x065 => self.tone_channels[0].set_frequency_reg_hi(data),
-            0x068 => self.tone_channels[0].control_reg.set_lo_byte(data),
-            0x069 => self.tone_channels[0].control_reg.set_hi_byte(data),
-            0x06C => self.tone_channels[0].set_frequency_reg_lo(data),
-            0x06D => self.tone_channels[0].set_frequency_reg_hi(data),
+            0x068 => self.tone_channels[1].set_control_reg_lo(data),
+            0x069 => self.tone_channels[1].set_control_reg_hi(data),
+            0x06C => self.tone_channels[1].set_frequency_reg_lo(data),
+            0x06D => self.tone_channels[1].set_frequency_reg_hi(data),
+            0x080 => self.psg_left_right_reg.set_lo_byte(data),
+            0x081 => self.psg_left_right_reg.set_hi_byte(data),
             0x082 => self.dma_control_reg.set_lo_byte(data),
             0x083 => {
                 self.dma_control_reg.set_hi_byte(data);
@@ -119,6 +139,7 @@ impl Memory for SoundController {
                     self.dma_sound_channels[1].restart();
                 }
             }
+            0x084 => self.master_enable = (data >> 7) & 1 == 1,
             0x0A0..=0x0A7 => {
                 let (fifo_i, octet_i) = {
                     let reg_i = addr - 0x0A0;

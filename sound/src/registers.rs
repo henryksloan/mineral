@@ -81,6 +81,11 @@ bitfield! {
   pub u8, hi_byte, set_hi_byte: 15, 8;
 }
 
+pub struct LeftRight<T> {
+    pub left: T,
+    pub right: T,
+}
+
 bitfield! {
   /// 4000080h - SOUNDCNT_L
   /// Controls L/R volume/enablement for channels 1-4 (PSG: Programmable Sound Generator)
@@ -99,6 +104,26 @@ bitfield! {
 
   pub u8, lo_byte, set_lo_byte: 7, 0;
   pub u8, hi_byte, set_hi_byte: 15, 8;
+}
+
+impl PsgLeftRightReg {
+    // TODO: Separate left and right audio
+    pub fn psg_master_vol(&self) -> LeftRight<f32> {
+        LeftRight {
+            left: self.vol_left() as f32 / 7.0,
+            right: self.vol_right() as f32 / 7.0,
+        }
+    }
+
+    pub fn channel_enabled(&self, psg_channel_i: usize) -> LeftRight<bool> {
+        let (left, right) = match psg_channel_i {
+            0 => (self.enable_1_left(), self.enable_1_right()),
+            1 => (self.enable_2_left(), self.enable_2_right()),
+            2 => (self.enable_3_left(), self.enable_3_right()),
+            3 | _ => (self.enable_4_left(), self.enable_4_right()),
+        };
+        LeftRight { left, right }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -137,6 +162,36 @@ bitfield! {
 
   pub u8, lo_byte, set_lo_byte: 7, 0;
   pub u8, hi_byte, set_hi_byte: 15, 8;
+}
+
+impl DmaControlMixReg {
+    pub fn psg_vol_multiplier(&self) -> f32 {
+        match self.psg_vol() {
+            0b00 => 0.25,
+            0b01 => 0.5,
+            0b10 | _ => 1.0, // `3` is technically illegal
+        }
+    }
+
+    pub fn dma_sound_vol_multiplier(&self, dma_channel_i: usize) -> f32 {
+        let vol_bit = match dma_channel_i {
+            0 => self.dma_a_vol(),
+            1 | _ => self.dma_b_vol(),
+        };
+        if vol_bit {
+            1.0
+        } else {
+            0.5
+        }
+    }
+
+    pub fn dma_sound_enabled(&self, dma_channel_i: usize) -> LeftRight<bool> {
+        let (left, right) = match dma_channel_i {
+            0 => (self.enable_dma_a_left(), self.enable_dma_a_right()),
+            1 | _ => (self.enable_dma_b_left(), self.enable_dma_b_right()),
+        };
+        LeftRight { left, right }
+    }
 }
 
 bitfield! {
