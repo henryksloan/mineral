@@ -90,6 +90,7 @@ impl SoundController {
 
 impl Memory for SoundController {
     fn peek(&self, addr: usize) -> u8 {
+        // TODO: DO NOT SUBMIT: Implement reading
         match addr {
             _ => 0,
         }

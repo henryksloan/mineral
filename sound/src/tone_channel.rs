@@ -1,5 +1,9 @@
 use crate::registers::*;
 
+// The length counter is in units of 1/256 seconds, so this represents the number of clock ticks
+// per length counter decrement.
+const LENGTH_UNIT_PERIOD: u32 = 16777216 / 256;
+
 pub struct ToneChannel {
     // Channel 2 doesn't support tone sweep, so this register is unmodifiable via IO for that channel.
     pub sweep_reg: ToneSweepReg,
@@ -9,6 +13,8 @@ pub struct ToneChannel {
     counter: u32,
     period: u32,
     curr_vol: u16,
+    length_counter: u32,
+    length_divider: u32,
 }
 
 impl ToneChannel {
@@ -21,6 +27,8 @@ impl ToneChannel {
             counter: 0,
             period: 0,
             curr_vol: 0,
+            length_counter: 0,
+            length_divider: 0,
         }
     }
 
@@ -30,10 +38,22 @@ impl ToneChannel {
         } else {
             self.counter = self.period;
         }
+
+        if self.length_divider > 0 {
+            self.length_divider -= 1;
+        } else {
+            self.length_divider = LENGTH_UNIT_PERIOD;
+            if self.length_counter > 0 {
+                self.length_counter -= 1;
+            }
+        }
     }
 
     pub fn sample(&self) -> f32 {
-        // TODO: DO NOT SUBMIT: Duty cycle, etc.
+        // TODO: DO NOT SUBMIT: Duty cycle, envelope, frequency sweep
+        if self.frequency_reg.timed() && self.length_counter == 0 {
+            return 0.0;
+        }
         let vol = (self.curr_vol as f32) / 15.0;
         if self.counter < (self.period / 2) {
             vol
@@ -62,5 +82,7 @@ impl ToneChannel {
     fn restart(&mut self) {
         self.counter = self.period;
         self.curr_vol = self.control_reg.envelope_init();
+        self.length_counter = 64 - self.control_reg.length() as u32;
+        self.length_divider = LENGTH_UNIT_PERIOD;
     }
 }
