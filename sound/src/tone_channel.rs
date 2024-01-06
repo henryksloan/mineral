@@ -3,6 +3,9 @@ use crate::registers::*;
 // The length counter is in units of 1/256 seconds, so this represents the number of clock ticks
 // per length counter decrement.
 const LENGTH_UNIT_PERIOD: u32 = 16777216 / 256;
+// The envelope counter is in units of 1/64 seconds, so this represents the number of clock ticks
+// per envelope counter decrement.
+const ENVELOPE_UNIT_PERIOD: u32 = 16777216 / 64;
 
 pub struct ToneChannel {
     // Channel 2 doesn't support tone sweep, so this register is unmodifiable via IO for that channel.
@@ -14,6 +17,8 @@ pub struct ToneChannel {
     curr_vol: u16,
     length_counter: u32,
     length_divider: u32,
+    envelope_counter: u32,
+    envelope_divider: u32,
 }
 
 impl ToneChannel {
@@ -27,6 +32,8 @@ impl ToneChannel {
             curr_vol: 0,
             length_counter: 0,
             length_divider: 0,
+            envelope_counter: 0,
+            envelope_divider: 0,
         }
     }
 
@@ -45,6 +52,31 @@ impl ToneChannel {
                 self.length_counter -= 1;
             }
         }
+
+        if self.envelope_divider > 0 {
+            self.envelope_divider -= 1;
+        } else {
+            self.envelope_divider = LENGTH_UNIT_PERIOD;
+            if self.envelope_counter > 0 {
+                self.envelope_counter -= 1;
+            } else {
+                self.envelope_counter = self.control_reg.envelope_step_time() as u32;
+                if self.envelope_counter != 0 {
+                    match self.control_reg.envelope_dir() {
+                        EnvelopeDirection::Decrease => {
+                            if self.curr_vol > 0 {
+                                self.curr_vol -= 1;
+                            }
+                        }
+                        EnvelopeDirection::Increase => {
+                            if self.curr_vol < 15 {
+                                self.curr_vol += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn restart(&mut self) {
@@ -52,10 +84,12 @@ impl ToneChannel {
         self.curr_vol = self.control_reg.envelope_init();
         self.length_counter = 64 - self.control_reg.length() as u32;
         self.length_divider = LENGTH_UNIT_PERIOD;
+        self.envelope_counter = self.control_reg.envelope_step_time() as u32;
+        self.envelope_divider = ENVELOPE_UNIT_PERIOD;
     }
 
     pub fn sample(&self) -> f32 {
-        // TODO: DO NOT SUBMIT: Envelope, frequency sweep
+        // TODO: DO NOT SUBMIT: Frequency sweep
         if self.frequency_reg.timed() && self.length_counter == 0 {
             return 0.0;
         }
@@ -75,7 +109,9 @@ impl ToneChannel {
         self.control_reg.set_hi_byte(data);
         // Writing zeroes to bits 3-7 of this half of the control register immediately turns off
         // the channel.
-        if !self.control_reg.envelope_dir() && self.control_reg.envelope_init() == 0 {
+        if self.control_reg.envelope_dir() == EnvelopeDirection::Decrease
+            && self.control_reg.envelope_init() == 0
+        {
             self.curr_vol = 0;
         }
     }

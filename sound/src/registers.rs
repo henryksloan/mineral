@@ -11,6 +11,21 @@ bitfield! {
   pub u8, hi_byte, set_hi_byte: 15, 8;
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum EnvelopeDirection {
+    Decrease,
+    Increase,
+}
+
+impl From<u8> for EnvelopeDirection {
+    fn from(val: u8) -> Self {
+        match val {
+            0 => Self::Decrease,
+            1 | _ => Self::Increase,
+        }
+    }
+}
+
 bitfield! {
   /// 4000062h, 4000068h, 4000078h - SOUND1CNT_H, SOUND2CNT_L, SOUND4CNT_L
   /// Configures duty, length and envelope for channels 1, 2 and 4
@@ -20,7 +35,9 @@ bitfield! {
   /// Ignored for channel 4 (noise)
   pub duty_pattern, _: 7, 6;
   pub envelope_step_time, _: 10, 8;
-  pub envelope_dir, _: 11;
+  // bitfield ignores types and `into` for single-index fields, so `11, 11` tells it to treat it
+  // like a non-bool field.
+  pub u8, into EnvelopeDirection, envelope_dir, _: 11, 11;
   pub envelope_init, _: 15, 12;
 
   pub u8, lo_byte, set_lo_byte: 7, 0;
