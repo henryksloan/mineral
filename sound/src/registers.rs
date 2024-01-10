@@ -77,10 +77,10 @@ bitfield! {
 bitfield! {
   /// 4000070h - SOUND3CNT_L
   /// Controls enablement and RAM selection for channel 3
-  pub struct WaveEnableReg(u16);
+  pub struct WaveControlReg(u16);
   impl Debug;
   pub ram_dimension, _: 5;
-  pub ram_bank_number, _: 6;
+  pub ram_bank_number, _: 6, 6;
   pub enable, _: 7;
 
   pub u8, lo_byte, set_lo_byte: 7, 0;

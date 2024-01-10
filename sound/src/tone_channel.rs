@@ -1,12 +1,5 @@
+use crate::consts::*;
 use crate::registers::*;
-
-// The length counter is in units of 1/256 seconds, so this represents the number of clock ticks
-// per length counter decrement.
-const LENGTH_UNIT_PERIOD: u32 = 16777216 / 256;
-// The envelope counter is in units of 1/64 seconds.
-const ENVELOPE_UNIT_PERIOD: u32 = 16777216 / 64;
-// The sweep counter is in units of 1/64 seconds.
-const SWEEP_UNIT_PERIOD: u32 = 16777216 / 128;
 
 pub struct ToneChannel {
     // Channel 2 doesn't support tone sweep, so this register is unmodifiable via IO for that channel.
@@ -163,7 +156,7 @@ impl ToneChannel {
     }
 
     fn period(&self) -> u32 {
-        16_777_216 / (131072 / (2048 - self.curr_rate as u32))
+        MASTER_CLOCK_HZ / (131_072 / (2048 - self.curr_rate as u32))
     }
 
     fn duty_high_width(&self) -> u32 {
