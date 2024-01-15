@@ -2,6 +2,7 @@ use gba::GBA;
 use sound::AudioRingBuffer;
 
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::{env, fs::File, io::Read, time};
 
 use sdl2::audio::{AudioCallback, AudioSpecDesired};
@@ -16,7 +17,9 @@ impl AudioCallback for AudioBufferWrapper {
         let mut audio_buffer = self.0.lock().unwrap();
         for x in out.iter_mut() {
             let play_i = audio_buffer.play_cursor & (audio_buffer.buffer.len() - 1);
-            *x = audio_buffer.buffer[play_i];
+            // Simple volume attenuation in lieu of a volume setting
+            const VOL_MULTIPLIER: f32 = 0.25;
+            *x = audio_buffer.buffer[play_i] * VOL_MULTIPLIER;
             audio_buffer.play_cursor += 1;
             // TODO: Once CPU/APU sync is improved (namely: pipeline emulation), add some kind of desync compensation.
             //
@@ -46,7 +49,8 @@ fn main() {
         .build()
         .unwrap();
 
-    let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+    // let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+    let mut canvas = window.into_canvas().build().unwrap();
     let mut event_pump = sdl_context.event_pump().unwrap();
     canvas.set_scale(3.0, 3.0).unwrap();
 
@@ -134,7 +138,7 @@ fn main() {
 
             let elapsed = fps_timer.elapsed();
             if elapsed < time::Duration::from_millis(16) {
-                // thread::sleep(time::Duration::from_millis(16) - elapsed);
+                thread::sleep(time::Duration::from_millis(16) - elapsed);
             }
             fps_timer = time::Instant::now();
 

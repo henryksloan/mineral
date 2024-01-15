@@ -74,7 +74,7 @@ impl WaveChannel {
 
     // `octet_i` represents the i'th pattern RAM register (4000090h, 4000091h, 4000092h, etc.),
     // although `pattern_ram` stores them in the opposite order.
-    pub fn read_pattern_octet(&mut self, octet_i: usize) -> u8 {
+    pub fn read_pattern_octet(&self, octet_i: usize) -> u8 {
         let bank_i = self.control_reg.ram_bank_number() as usize;
         let offset = 8 * (7 - octet_i);
         ((self.pattern_ram[bank_i] >> offset) & 0xFF) as u8
@@ -129,6 +129,14 @@ impl WaveChannel {
         if self.frequency_reg.restart() {
             self.restart();
         }
+    }
+
+    pub fn frequency_reg_lo(&self) -> u8 {
+        self.frequency_reg.lo_byte()
+    }
+
+    pub fn frequency_reg_hi(&self) -> u8 {
+        self.frequency_reg.hi_byte()
     }
 
     fn restart(&mut self) {

@@ -144,6 +144,14 @@ impl ToneChannel {
         }
     }
 
+    pub fn control_reg_lo(&self) -> u8 {
+        self.control_reg.lo_byte()
+    }
+
+    pub fn control_reg_hi(&self) -> u8 {
+        self.control_reg.hi_byte()
+    }
+
     pub fn set_frequency_reg_lo(&mut self, data: u8) {
         self.frequency_reg.set_lo_byte(data);
     }
@@ -153,6 +161,14 @@ impl ToneChannel {
         if self.frequency_reg.restart() {
             self.restart();
         }
+    }
+
+    pub fn frequency_reg_lo(&self) -> u8 {
+        self.frequency_reg.lo_byte()
+    }
+
+    pub fn frequency_reg_hi(&self) -> u8 {
+        self.frequency_reg.hi_byte()
     }
 
     fn period(&self) -> u32 {

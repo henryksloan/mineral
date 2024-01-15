@@ -90,7 +90,6 @@ impl SoundController {
                 let wave_enabled = self.psg_left_right_reg.channel_enabled(2);
                 // TODO: Separate left and right audio
                 if wave_enabled.left || wave_enabled.right {
-                    println!("{}", psg_multiplier * self.wave_channel.sample());
                     audio_buffer.buffer[write_i] += psg_multiplier * self.wave_channel.sample();
                 }
 
@@ -127,6 +126,34 @@ impl Memory for SoundController {
     fn peek(&self, addr: usize) -> u8 {
         // TODO: DO NOT SUBMIT: Implement reading
         match addr {
+            0x060 => self.tone_channels[0].sweep_reg.lo_byte(),
+            0x061 => self.tone_channels[0].sweep_reg.hi_byte(),
+            0x062 => self.tone_channels[0].control_reg_lo(),
+            0x063 => self.tone_channels[0].control_reg_hi(),
+            0x064 => self.tone_channels[0].frequency_reg_lo(),
+            0x065 => self.tone_channels[0].frequency_reg_hi(),
+            0x068 => self.tone_channels[1].control_reg_lo(),
+            0x069 => self.tone_channels[1].control_reg_hi(),
+            0x06C => self.tone_channels[1].frequency_reg_lo(),
+            0x06D => self.tone_channels[1].frequency_reg_hi(),
+            0x070 => self.wave_channel.control_reg.lo_byte(),
+            0x071 => self.wave_channel.control_reg.hi_byte(),
+            0x072 => self.wave_channel.length_volume_reg.lo_byte(),
+            0x073 => self.wave_channel.length_volume_reg.hi_byte(),
+            0x074 => self.wave_channel.frequency_reg_lo(),
+            0x075 => self.wave_channel.frequency_reg_hi(),
+            0x080 => self.psg_left_right_reg.lo_byte(),
+            0x081 => self.psg_left_right_reg.hi_byte(),
+            0x082 => self.dma_control_reg.lo_byte(),
+            // TODO: DO NOT SUBMIT: Should the reset bit be masked out?
+            0x083 => self.dma_control_reg.hi_byte(),
+            // TODO: DO NOT SUBMIT: Sound ON bits computed from channels
+            0x084 => (self.master_enable as u8) << 7,
+            // TODO: DO NOT SUBMIT: 4000088h - SOUNDBIAS - Sound PWM Control
+            0x090..=0x09F => {
+                let octet_i = addr - 0x090;
+                self.wave_channel.read_pattern_octet(octet_i)
+            }
             _ => 0,
         }
     }
@@ -162,6 +189,7 @@ impl Memory for SoundController {
                 }
             }
             0x084 => self.master_enable = (data >> 7) & 1 == 1,
+            // TODO: DO NOT SUBMIT: 4000088h - SOUNDBIAS - Sound PWM Control
             0x090..=0x09F => {
                 let octet_i = addr - 0x090;
                 self.wave_channel.write_pattern_octet(octet_i, data);
