@@ -105,14 +105,32 @@ bitfield! {
   /// Controls frequency, length-limiting and resetting for channel 4
   pub struct NoiseFrequencyReg(u16);
   impl Debug;
-  pub rate, _: 2, 0;
+  pub divide_ratio, _: 2, 0;
   pub counter_step, _: 3;
   pub shift_frequency, _: 7, 4;
   pub timed, _: 14;
-  pub reset, _: 15;
+  pub restart, _: 15;
 
   pub u8, lo_byte, set_lo_byte: 7, 0;
   pub u8, hi_byte, set_hi_byte: 15, 8;
+}
+
+impl NoiseFrequencyReg {
+    pub fn counter_width(&self) -> usize {
+        if self.counter_step() {
+            15
+        } else {
+            7
+        }
+    }
+
+    pub fn shift_reg_init(&self) -> u16 {
+        0x40 << (self.counter_width() - 7)
+    }
+
+    pub fn shift_xor_factor(&self) -> u16 {
+        0x60 << (self.counter_width() - 7)
+    }
 }
 
 pub struct LeftRight<T> {

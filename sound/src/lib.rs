@@ -3,6 +3,7 @@ extern crate bitfield;
 
 mod consts;
 mod dma_sound_channel;
+mod noise_channel;
 mod registers;
 mod tone_channel;
 mod wave_channel;
@@ -13,6 +14,7 @@ use crate::dma_sound_channel::*;
 use crate::registers::*;
 use crate::tone_channel::*;
 use crate::wave_channel::*;
+use crate::noise_channel::*;
 
 use memory::Memory;
 
@@ -37,6 +39,7 @@ impl AudioRingBuffer {
 pub struct SoundController {
     tone_channels: [ToneChannel; 2],
     wave_channel: WaveChannel,
+    noise_channel: NoiseChannel,
     dma_sound_channels: [DmaSoundChannel; 2],
     psg_left_right_reg: PsgLeftRightReg,
     dma_control_reg: DmaControlMixReg,
@@ -51,6 +54,7 @@ impl SoundController {
         Self {
             tone_channels: [ToneChannel::new(), ToneChannel::new()],
             wave_channel: WaveChannel::new(),
+            noise_channel: NoiseChannel::new(),
             dma_sound_channels: [DmaSoundChannel::new(), DmaSoundChannel::new()],
             psg_left_right_reg: PsgLeftRightReg(0),
             dma_control_reg: DmaControlMixReg(0),
@@ -67,6 +71,7 @@ impl SoundController {
         }
 
         self.wave_channel.tick();
+        self.noise_channel.tick();
 
         if self.sample_divider > 0 {
             self.sample_divider -= 1;
@@ -91,6 +96,12 @@ impl SoundController {
                 // TODO: Separate left and right audio
                 if wave_enabled.left || wave_enabled.right {
                     audio_buffer.buffer[write_i] += psg_multiplier * self.wave_channel.sample();
+                }
+
+                let noise_enabled = self.psg_left_right_reg.channel_enabled(3);
+                // TODO: Separate left and right audio
+                if noise_enabled.left || noise_enabled.right {
+                    audio_buffer.buffer[write_i] += psg_multiplier * self.noise_channel.sample();
                 }
 
                 for i in [0, 1] {
@@ -124,7 +135,6 @@ impl SoundController {
 
 impl Memory for SoundController {
     fn peek(&self, addr: usize) -> u8 {
-        // TODO: DO NOT SUBMIT: Implement reading
         match addr {
             0x060 => self.tone_channels[0].sweep_reg.lo_byte(),
             0x061 => self.tone_channels[0].sweep_reg.hi_byte(),
@@ -142,14 +152,18 @@ impl Memory for SoundController {
             0x073 => self.wave_channel.length_volume_reg.hi_byte(),
             0x074 => self.wave_channel.frequency_reg_lo(),
             0x075 => self.wave_channel.frequency_reg_hi(),
+            0x078 => self.noise_channel.control_reg_lo(),
+            0x079 => self.noise_channel.control_reg_hi(),
+            0x07C => self.noise_channel.frequency_reg_lo(),
+            0x07D => self.noise_channel.frequency_reg_hi(),
             0x080 => self.psg_left_right_reg.lo_byte(),
             0x081 => self.psg_left_right_reg.hi_byte(),
             0x082 => self.dma_control_reg.lo_byte(),
-            // TODO: DO NOT SUBMIT: Should the reset bit be masked out?
+            // TODO: Should the reset bit be masked out?
             0x083 => self.dma_control_reg.hi_byte(),
-            // TODO: DO NOT SUBMIT: Sound ON bits computed from channels
+            // TODO: Sound ON bits computed from channels
             0x084 => (self.master_enable as u8) << 7,
-            // TODO: DO NOT SUBMIT: 4000088h - SOUNDBIAS - Sound PWM Control
+            // TODO: 4000088h - SOUNDBIAS - Sound PWM Control
             0x090..=0x09F => {
                 let octet_i = addr - 0x090;
                 self.wave_channel.read_pattern_octet(octet_i)
@@ -176,6 +190,10 @@ impl Memory for SoundController {
             0x073 => self.wave_channel.length_volume_reg.set_hi_byte(data),
             0x074 => self.wave_channel.set_frequency_reg_lo(data),
             0x075 => self.wave_channel.set_frequency_reg_hi(data),
+            0x078 => self.noise_channel.set_control_reg_lo(data),
+            0x079 => self.noise_channel.set_control_reg_hi(data),
+            0x07C => self.noise_channel.set_frequency_reg_lo(data),
+            0x07D => self.noise_channel.set_frequency_reg_hi(data),
             0x080 => self.psg_left_right_reg.set_lo_byte(data),
             0x081 => self.psg_left_right_reg.set_hi_byte(data),
             0x082 => self.dma_control_reg.set_lo_byte(data),
@@ -189,7 +207,7 @@ impl Memory for SoundController {
                 }
             }
             0x084 => self.master_enable = (data >> 7) & 1 == 1,
-            // TODO: DO NOT SUBMIT: 4000088h - SOUNDBIAS - Sound PWM Control
+            // TODO: 4000088h - SOUNDBIAS - Sound PWM Control
             0x090..=0x09F => {
                 let octet_i = addr - 0x090;
                 self.wave_channel.write_pattern_octet(octet_i, data);

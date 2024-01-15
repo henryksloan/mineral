@@ -39,7 +39,6 @@ impl WaveChannel {
         if !self.control_reg.enable() || (self.frequency_reg.timed() && self.length_counter == 0) {
             return 0.0;
         }
-        // TODO: DO NOT SUBMIT: How should this behave for e.g. all zeroes?
         self.volume_multiplier()
             * (((self.pattern_ram[self.playing_bank_i()] >> 124) as f32 / 15.0) - 0.5)
     }
