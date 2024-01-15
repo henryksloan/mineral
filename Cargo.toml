@@ -3,6 +3,7 @@
 members = [
     "cpu",
     "ppu",
+    "sound",
     "memory",
     "gba",
 ]

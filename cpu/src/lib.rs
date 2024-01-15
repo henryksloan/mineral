@@ -974,8 +974,11 @@ impl Memory for CPU {
             0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000],
             // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000],
             // TODO: Different wait states
+            0x09FFFF00..=0x09FFFFFF => 1,
             0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000],
             0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000],
+            // 0x0D000000..=0x0DFFFFFF => 1,
+            0x0D000000..=0x0DFFFFFF => 1,
             0x0C000000..=0x0DFFFFFF => self.cart_rom[addr - 0x0C000000],
             // Flash stub
             0x0E000000 => 0xC2,
@@ -997,6 +1000,7 @@ impl Memory for CPU {
             // 0x03000000..=0x0307FFFF => self.iwram[addr - 0x03000000] = data,
             0x03000000..=0x03FFFFFF => self.iwram[(addr - 0x03000000) % 0x8000] = data,
             // 0x03FFFF00..=0x03FFFFFF => self.iwram[addr - 0x3FF8000] = data,
+            // 0x0D000000..=0x0DFFFFFF => println!("{:08X} {:02X}", addr, data),
             0x08000000..=0x0DFFFFFF => {}
             // 0x08000000..=0x09FFFFFF => self.cart_rom[addr - 0x08000000] = data,
             // 0x0A000000..=0x0BFFFFFF => self.cart_rom[addr - 0x0A000000] = data,
